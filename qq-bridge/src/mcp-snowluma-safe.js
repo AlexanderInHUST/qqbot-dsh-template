@@ -38,6 +38,10 @@ const cfg = loadConfig();
 const HUMAN_SEND_NOTE = cfg.socialV2?.send?.human?.enabled === true
   ? '条与条之间按你打下一条要的时间发，不用自己定间隔；一次最多几条看场景（私聊和家里的群 4 条，别的群 2 条），多出来的会并进最后一条。发的过程中对方插话，后面的就不发了，返回 notSent，先看他说了啥再决定。'
   : '';
+// qqbot_agent：发前看一眼（socialV2.replyTiming.holdBeforeSend，见 app/reply-timing.js）
+const HOLD_SEND_NOTE = cfg.socialV2?.replyTiming?.enabled === true && cfg.socialV2?.replyTiming?.holdBeforeSend !== false
+  ? '你想发的时候对方又说了话（你还没看过的），这次先不发，返回 held 和他新说的话（newMessages），你那段原样在 notSent 里；看完意思没变就照发，要改就改，不用说了就别发。'
+  : '';
 
 function getConfig() {
   return loadConfig();
@@ -495,7 +499,7 @@ server.tool(
 
 server.tool(
   'qq_reply',
-  '在指定 QQ 群里引用/回复某条消息，并发送一条文本。适合群消息很多、需要明确“我回的是哪条”时使用；replyToMessageId 是被引用消息的 id（非零整数，QQ 消息 id 可能为负数），可先用 qq_get_recent_messages / qq_get_unread_messages / qq_get_message_detail 查到具体消息内容和 id；这个 id 必须是当前会话里的消息。不要每条都引用。只有以下情况才需要引用：① 你这条消息指向的人或消息并非最新一条别人的消息（也就是你在回更早的某条）；② 你连续几句话里不同消息指代的是不同的消息或不同的人。其他情况（上下文唯一、刚在接同一条最新消息）不要引用，别让对方猜，也别为了用工具而用。要带会话令牌 token。',
+  '在指定 QQ 群里引用/回复某条消息，并发送一条文本。适合群消息很多、需要明确“我回的是哪条”时使用；replyToMessageId 是被引用消息的 id（非零整数，QQ 消息 id 可能为负数），可先用 qq_get_recent_messages / qq_get_unread_messages / qq_get_message_detail 查到具体消息内容和 id；这个 id 必须是当前会话里的消息。不要每条都引用。只有以下情况才需要引用：① 你这条消息指向的人或消息并非最新一条别人的消息（也就是你在回更早的某条）；② 你连续几句话里不同消息指代的是不同的消息或不同的人。其他情况（上下文唯一、刚在接同一条最新消息）不要引用，别让对方猜，也别为了用工具而用。要带会话令牌 token。' + HOLD_SEND_NOTE,
   {
     groupId: z.union([z.number(), z.string()]).describe('群号（必须在白名单内）'),
     replyToMessageId: z.union([z.number(), z.string()]).describe('被引用/回复的消息 id（非零整数，可为负数）'),
@@ -703,7 +707,7 @@ server.tool(
 
 server.tool(
   'qq_send_message',
-  '统一发送工具：可发一条或多条，可引用某条消息，条间隔按字数自动算。注意：字符串=一条消息，数组=多条消息；每个字符串内部不要用空格分隔中文短句，需要多条请用数组元素；每条消息要读起来完整，不要把同一句话拆到两条里。只有以下情况才需要传 replyToMessageId 引用：① 你这条消息指向的人或消息并非最新一条别人的消息（也就是你在回更早的某条）；② 你连续几句话里不同消息指代的是不同的消息或不同的人。其他情况（上下文唯一、刚在接同一条最新消息）不要引用，别让对方猜，也别为了用工具而用。' + HUMAN_SEND_NOTE,
+  '统一发送工具：可发一条或多条，可引用某条消息，条间隔按字数自动算。注意：字符串=一条消息，数组=多条消息；每个字符串内部不要用空格分隔中文短句，需要多条请用数组元素；每条消息要读起来完整，不要把同一句话拆到两条里。只有以下情况才需要传 replyToMessageId 引用：① 你这条消息指向的人或消息并非最新一条别人的消息（也就是你在回更早的某条）；② 你连续几句话里不同消息指代的是不同的消息或不同的人。其他情况（上下文唯一、刚在接同一条最新消息）不要引用，别让对方猜，也别为了用工具而用。' + HUMAN_SEND_NOTE + HOLD_SEND_NOTE,
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -781,7 +785,9 @@ server.tool(
     purpose: z.enum(['messages', 'reply']).optional().describe('默认 messages：等新消息、等对方回答；reply：回复前短静默，计入最后来信后已过去的时间'),
     timeoutMs: z.number().optional().describe('等待预算毫秒数，默认 30000、最长 600000（群里最多 30000）；reply 达到静默即返回，不必等满'),
     minNewMessages: z.number().optional().describe('仅 messages 用途：至少等到多少条新消息才进入静默窗口，默认 1；reply 用途会忽略它'),
-    quietMs: z.number().optional().describe('静默窗口毫秒数，建议 3000~5000，对方明显没说完再长一点；reply 从最后来信开始计时，messages 只在等到新消息后计时')
+    quietMs: z.number().optional().describe(cfg.socialV2?.replyTiming?.enabled === true
+      ? '一般不用填：会按对方平时连发的快慢和他最后那句（说一半、只发了图、问你的话）自动定；填了只会等得更久。reply 从最后来信开始计时，messages 只在等到新消息后计时'
+      : '静默窗口毫秒数，建议 3000~5000，对方明显没说完再长一点；reply 从最后来信开始计时，messages 只在等到新消息后计时')
   },
   async ({ key, token, purpose, timeoutMs, minNewMessages, quietMs }) => {
     try {

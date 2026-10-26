@@ -24,12 +24,12 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 
 ### 代码结构
 
-- qq-bridge/src/bridge.js 是入口和老功能，约 5 千行。二代社交那部分在 qq-bridge/src/app/ 下 19 个模块，每个是 `createX(app)` 返回 `{exports, link(), start()}`：
+- qq-bridge/src/bridge.js 是入口和老功能，约 5 千行。二代社交那部分在 qq-bridge/src/app/ 下 20 个模块，每个是 `createX(app)` 返回 `{exports, link(), start()}`：
   - wake / wake-triggers / wake-prompt：唤醒、门控、提示；
   - v2-state / v2-messages：状态和消息；
   - self-now / self-check / life / tell-myself：她的状态、自洽、心情和生活、捎话给别的窗口；
   - free-time / reminders / night-sleep / idle-compact；
-  - human-send / media / stickers / voice / slang；
+  - human-send / reply-timing（等对方说完、发前看一眼）/ media / stickers / voice / slang；
   - console-server。
 - 纯函数在 src/ 下：reply-gate.js、inner-life.js、free-time.js（活动菜单）、proactive-schedule.js、qq-model-view.js（给模型看的消息，`defang` 把数据里的【】换掉）、v2-wait.js 等。
 - 状态在 bridge 卷的 state/social-v2.json，防抖存盘（`stateSaveDelayMs` 默认 1000，0 = 马上存），退出、/api/restart 前先存。
@@ -68,10 +68,15 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - `talkBack.byKey` 单独设时间窗，`windowMinutes` 负数是不限：小群 `group:1100000001` 是 -1，她下次说话前，她聊着的人什么时候说话都叫她。
   - 不算的：只发图或表情的（只发表情的、是她直接在跟着说的人就算；照片截图都不算）、引用或 @ 别人的、约游戏喊人上号的（`gameWords`）。被接话叫来她没开口，她看过的那几个人这段就不再叫（`talkBackDeclined`），她直接在跟着说的人另外说话还叫。
   - 家里以外的群 `talkBack.outside`：她说完后已经有 3 个别人说过话（`crowdOthers`）不叫；这人在跟别人你来我往（`sideTalk`）不叫。算她在聊着的人还加上她引用或 @ 的人（`toUserIds`）和把她叫来的人（`wakeBy`）。`outside.direct:true` 是更严的第一版。
-- 唤醒合并 `wake.batchWindowMs` 3000，以全局配置为准。`maxWakePerHour` / `maxWakePerMinute` 0（不限）。
+- 等对方说完再开口（`replyTiming`，src/app/reply-timing.js，纯函数在 v2-wait.js 的 `adaptiveQuietMs`）：最后一条别人的话之后安静多久才算说完，按这个人自己的连发节奏（同一人相邻两条间隔的中位数 × `rhythmFactor` 1，夹在 3~8 秒；样本不够 3 个用 `baseMs` 3 秒）再按这条的样子加减：
+  - 话说一半（然后、但是、我跟你说、逗号结尾）或只 @ 了一下 +5 秒；只发了照片截图 +4 秒（表情包不算）；几个字的碎片 +3 秒；
+  - 问她的话说完了（问号、吗、几点…）2 秒；带句号叹号的不超过 3 秒；家里以外的群正热闹（60 秒 ≥6 条 ≥3 人）+1 秒；总共夹在 1.5~12 秒。
+  - 用在合并唤醒（到点还没说完就再等，从第一条算最多 `maxDelayMs` 15 秒；定时类唤醒不管）、一轮里的等待（她填的 quietMs 只会更久）、回复门控的 quietMs。日志 `grep 计划唤醒` 带“等对方说完：Xs，原因”。
+  - `enabled:false`（代码默认）回到下面的死时间。
+- 唤醒合并 `wake.batchWindowMs` 3000（replyTiming 关着时用），以全局配置为准。`maxWakePerHour` / `maxWakePerMinute` 0（不限）。
 - 会话正忙时进来的唤醒，回合结束后只在触发它的那条还没给她看过时补发。日志 `grep 跳过补发`。
 - 一轮里的等待 qq_wait_for_messages（`wait`）：
-  - 有新消息后安静 3 秒返回；对方像没说完要 5 秒；有人叫她只等 2 秒；第一条新消息后最多再拖 15 秒。
+  - 有新消息后安静够了返回（replyTiming 开着按上面算；关着是 3 秒、像没说完 5 秒、有人叫她 2 秒）；第一条新消息后最多再拖 15 秒。
   - 群里最多等 `replyGate.groupWaitMaxMs` 30 秒，只有有人叫她、或者门控觉得该回才提前返回。
   - 等待的基线从 readThroughSeq 算，看过的不会再叫醒她。
 - 群里攒了很久的未读（`context.staleUnreadMinutes` 30）：开头连着的旧未读不给原文，快照里写 `olderSkipped`，遇到叫她的就停；放进 recent 的旧未读（`staleRecent`，不进 JSON）提示里写明是当时没接上的、话题多半过去了，不是没办完的正事就别补回、别追问。私聊不跳。过了 10 分钟的消息带 `ago`。日志 `grep 快照跳过过时未读`。
@@ -86,6 +91,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 - 像人打字那样发（`send.human`）：条间隔 600 毫秒 + 每字 120 毫秒，±30%，夹在 0.4~4 秒。
   - 一次最多几条 `maxBubbles`：私聊 4、家里的群 4、别的群 2，多的并进最后一条。
   - `cutOnInterrupt`：私聊对方说了话、群里有人叫她，后面的不发，返回 `notSent`。日志 `grep 分条发送被插话打断`。
+- 发前看一眼（`replyTiming.holdBeforeSend`）：她调 qq_send_message / qq_reply 时，她最后一次看消息以后跟她有关的人又说了话（私聊：对方；群：叫她的、她引用或 @ 的人、把她叫来的人、她开口前最后说话的人；别的机器人不算），先不发：等对方说完（最多 `holdQuietMaxMs` 8 秒），返回 `held:true` + `newMessages` + 没发的 `notSent`，她看完照发、改了再发或不说了。每批新消息拦一次，一轮最多 `maxHoldsPerTurn` 2 次；play 发进聊天的不拦。日志 `grep 发前看一眼`。
 - 发送条数不限（`send.maxSendPerHour` / `maxSendPerMinute` 0）。
 - 她把话直接写成文字、一轮里什么也没发（文字不会转发到 QQ）：收尾的 qq_mark_read / qq_set_wake_config 结果带 `hint`，没收尾的【提醒】里也写明那段没发出去；她写给自己的旁白（“不是在叫我”“没插话”、括号里的动作）不算。日志 `grep 话写成了文字没发出去`。
 - 别人发的表情包：文本里写 `[表情包]` / `[表情包:不想干]`，media kind 是 `sticker`。

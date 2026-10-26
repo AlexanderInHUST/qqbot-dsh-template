@@ -79,6 +79,7 @@ import { createLife } from './app/life.js';
 import { createReminders } from './app/reminders.js';
 import { createSelfCheck } from './app/self-check.js';
 import { createTellMyself } from './app/tell-myself.js';
+import { createReplyTiming } from './app/reply-timing.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -4861,6 +4862,7 @@ async function main() {
     createReminders(app),
     createSelfCheck(app),
     createTellMyself(app),
+    createReplyTiming(app),
   ];
   for (const m of appModules) Object.defineProperties(app, Object.getOwnPropertyDescriptors(m.exports));
   for (const m of appModules) m.link();

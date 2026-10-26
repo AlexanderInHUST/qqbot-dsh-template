@@ -9,7 +9,7 @@ export function createWakeTriggers(app) {
     cfg, log, shouldBlockSilentReply
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
-  let getSocialV2State, isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2, moodEngineCfgV2,
+  let getSocialV2State, isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2, moodEngineCfgV2, quietLeftV2,
     readThroughSeqV2, saveSocialV2State, scheduleWakeV2, socialV2;
 
   // 哪些消息直接叫醒她：私聊每条都叫；群里只有找她的（@/引用/叫名字或外号）、她指定的人、任意消息、
@@ -375,7 +375,9 @@ export function createWakeTriggers(app) {
     if (replyOnlyGroupV2(key)) return;
     const st = getSocialV2State(key);
     if (st.gateTimer) clearTimeout(st.gateTimer);
-    st.gateTimer = setTimeout(() => { st.gateTimer = null; evaluateReplyGateV2(key); }, Math.max(200, delayMs ?? replyGateCfgV2().quietMs));
+    // qqbot_agent：replyTiming 开着时按对方的节奏等他说完（reply-timing.js），不再是死的 quietMs
+    const delay = delayMs ?? quietLeftV2(key, st) ?? replyGateCfgV2().quietMs;
+    st.gateTimer = setTimeout(() => { st.gateTimer = null; evaluateReplyGateV2(key); }, Math.max(200, delay));
     st.gateTimer.unref?.();
   }
   function evaluateReplyGateV2(key) {
@@ -383,7 +385,7 @@ export function createWakeTriggers(app) {
     const st = getSocialV2State(key);
     const c = replyGateCfgV2();
     const now = Date.now();
-    const quietLeft = c.quietMs - (now - (Number(st.lastIncomingAt) || 0));
+    const quietLeft = quietLeftV2(key, st, now) ?? (c.quietMs - (now - (Number(st.lastIncomingAt) || 0)));
     if (quietLeft > 50) { armReplyGateV2(key, quietLeft); return null; }
     const batch = gatePendingV2(st, readThroughSeqV2(st), now);
     if (!batch.length) return null;
@@ -484,7 +486,7 @@ export function createWakeTriggers(app) {
     link() {
       ({
         getSocialV2State, isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2,
-        moodEngineCfgV2, readThroughSeqV2, saveSocialV2State, scheduleWakeV2, socialV2
+        moodEngineCfgV2, quietLeftV2, readThroughSeqV2, saveSocialV2State, scheduleWakeV2, socialV2
       } = app);
     },
     start() {},

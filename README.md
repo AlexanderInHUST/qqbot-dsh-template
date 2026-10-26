@@ -224,7 +224,8 @@ bridge 校验令牌、白名单、发送限额，按“像人打字”的节奏�
 - **一个会话对应一个聊天**：会话键是 `private:QQ号`、`group:群号`，自由时间是 `play:main`。对应的 DSH 会话 id 存在 bridge 的 `state/sessions.json`。
 - **会话正忙时又来了消息**：不打断。等这一轮结束，如果触发它的那条她还没看过，再补一次唤醒。重要的事（到点的提醒、说岔了、该睡觉了）用 DSH 的 steer 直接插进正在进行的这一轮。
 - **令牌**：每次唤醒给一个会话令牌，她调工具必须带上，bridge 用它确认“这个调用来自哪个会话”，跨会话乱发会被拒。
-- **一轮里的等待**：`qq_wait_for_messages` 不是死等，有新消息后安静 3 秒就返回，对方像没说完就多等一会儿，有人叫她只等 2 秒。
+- **等对方说完再开口**（`replyTiming`）：安静多久才算说完，按这个人自己平时连发的快慢定，再看最后那句的样子：话说一半、只 @ 了一下、只发了照片、几个字的碎片就多等，问她的话问完了只等 2 秒。合并唤醒、一轮里的等待（`qq_wait_for_messages`）、回复门控都用它；对方一直在说，从第一条算最多等 15 秒。关掉（`enabled:false`）就是固定的 3 秒、像没说完 5 秒、有人叫她 2 秒。
+- **发前看一眼**：她要发的时候，跟她有关的人（私聊的对方；群里叫她的、她引用或 @ 的、把她叫来的、她开口前最后说话的）又说了话，先不发，把新消息和没发的那段退回给她，她看完照发、改了再发或者不说了。每批新消息拦一次，一轮最多两次。
 
 ### 提示词
 
@@ -266,7 +267,7 @@ bridge 校验令牌、白名单、发送限额，按“像人打字”的节奏�
 | `src/app/v2-state.js`、`v2-messages.js` | 每个会话的状态、消息列表、已读位置 |
 | `src/app/self-now.js`、`self-check.js`、`life.js`、`tell-myself.js` | 【你现在】、自检、心情、生活、主动找人、捎话给别的窗口 |
 | `src/app/free-time.js`、`reminders.js`、`night-sleep.js`、`idle-compact.js` | 自由时间、提醒、睡觉、闲时压缩 |
-| `src/app/human-send.js`、`media.js`、`stickers.js`、`voice.js`、`slang.js` | 发话、图片、表情包、语音、黑话 |
+| `src/app/human-send.js`、`reply-timing.js`、`media.js`、`stickers.js`、`voice.js`、`slang.js` | 发话、等对方说完和发前看一眼、图片、表情包、语音、黑话 |
 | `src/app/console-server.js` | 控制台网页和给 MCP 调的 `/api/socialV2/*` |
 | `src/reply-gate.js`、`inner-life.js`、`free-time.js`、`proactive-schedule.js`、`qq-model-view.js`、`v2-wait.js` | 纯函数：门控算法、心情、活动菜单、作息表、给模型看的消息格式、等待逻辑 |
 | `src/mcp-snowluma-safe.js`、`mcp-web-search-safe.js`、`mcp-host-server.js` | DSH 起的 stdio MCP 服务 |
@@ -460,6 +461,7 @@ ssh -L 3080:127.0.0.1:3080 -L 3100:127.0.0.1:3100 -L 6080:127.0.0.1:6080 -L 6082
 |---|---|
 | `replyGate.talkValue`、`talkSchedule` | 每个会话多爱说话（`private` / `home` / `group`，`byKey` 单独设）、按时段的系数 |
 | `replyGate.talkBack` | 接话：说完多久内算、外面的群多严 |
+| `replyTiming` | 等对方说完再开口、发前看一眼（`holdBeforeSend`）；示例里只写了 `enabled`，其余用代码默认值 |
 | `send.human` | 打字节奏、一次最多几条 |
 | `nightSleep` | 睡觉时间。改了要同步 `proactive.schedule` 里的“睡觉”段 |
 | `proactive` | 自由时间：多久看一次、作息表概率、最少玩多久、歇多久、活动菜单 |
@@ -513,6 +515,7 @@ docker compose logs egress-proxy           # 她上了哪些网站
 | `'\[自洽\]'`、`'\[提醒\]'`、`'\[生活\]'`、`心情（自己体会的）` | 自检、提醒、生活、心情 |
 | `闲时压缩`、`人格卡`、`自动重试` | 压缩、人格卡加载、工具参数坏掉后的重试 |
 | `话写成了文字没发出去`、`分条发送被插话打断` | 发话的问题 |
+| `计划唤醒`、`发前看一眼` | 等了对方多久（带“等对方说完：Xs，原因”）、发前被拦下的 |
 | `digest`、`讲了见闻`、`换回默认模型` | 长期记忆（extras） |
 
 想看模型具体怎么想的：DSH Web UI 里能看每个会话；原始记录在 dsh 容器的 `/data/dsh/sessions/*/<会话 id>/session.v4.jsonl.zstd`，会话 id 在 bridge 的 `state/sessions.json`。

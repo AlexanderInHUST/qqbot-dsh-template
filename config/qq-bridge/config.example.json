@@ -401,6 +401,9 @@
         }
       }
     },
+    "replyTiming": {
+      "enabled": true
+    },
     "replyGate": {
       "enabled": true,
       "talkValue": {

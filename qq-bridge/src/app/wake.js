@@ -11,8 +11,8 @@ export function createWake(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2,
-    messageMediaStore, nightSleepBlocksV2, playHoldV2, readThroughSeqV2, saveSocialV2State, socialV2,
-    startFreeTimeV2, whenV2;
+    messageMediaStore, nightSleepBlocksV2, playHoldV2, quietLeftV2, quietNeededV2, readThroughSeqV2,
+    replyTimingCfgV2, saveSocialV2State, socialV2, startFreeTimeV2, whenV2;
 
   // qqbot_agent：模型偶尔把工具参数 JSON 写坏（DeepSeek 报 MALFORMED_RESPONSE “tool input is invalid JSON”），
   // 回合直接报错结束、她手上的事就断了。这里自动让她接着做，连续最多 socialV2.malformedRetry.max 次（默认 2），
@@ -286,16 +286,33 @@ export function createWake(app) {
     }
     st.pendingWakeReason = reason;
     // 合并窗口以全局配置为准：每个会话的 wakeConfig 里存着创建时的旧值，改配置要能直接生效。
-    const batchMs = Math.max(1000, Number(cfg.socialV2?.wake?.batchWindowMs) || Number(st.wakeConfig?.batchWindowMs) || 8000);
-    st.pendingWakeTimer = setTimeout(() => {
+    let batchMs = Math.max(1000, Number(cfg.socialV2?.wake?.batchWindowMs) || Number(st.wakeConfig?.batchWindowMs) || 8000);
+    // qqbot_agent：消息叫来的，按对方的节奏等他说完（replyTiming，见 reply-timing.js）：
+    // 不再死等 batchWindowMs，而是等到“最新一条之后安静够了”；到点还有人在说就再等，从第一条算最多 maxDelayMs
+    const rt = !isTimerWakeReason(reason) ? replyTimingCfgV2() : null;
+    const adaptive = !!rt?.enabled;
+    if (adaptive) batchMs = Math.max(300, quietLeftV2(key, st) ?? batchMs);
+    const since = Date.now();
+    const fire = () => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
+      if (adaptive && !isTimerWakeReason(finalReason)) {
+        const left = quietLeftV2(key, st) ?? 0;
+        const budget = rt.maxDelayMs - (Date.now() - since);
+        if (left > 50 && budget > 50) {
+          st.pendingWakeTimer = setTimeout(fire, Math.max(100, Math.min(left, budget)));
+          st.pendingWakeTimer.unref?.();
+          return;
+        }
+      }
       st.pendingWakeReason = null;
       void sendWakePromptV2(key, finalReason).catch((error) => log(`[reserved2] 计划唤醒异常 ${key}:`, error?.message ?? error));
-    }, batchMs);
+    };
+    st.pendingWakeTimer = setTimeout(fire, batchMs);
     // 与其它 per-conversation 定时器保持一致：别让一个待唤醒定时器把进程钉住不退出。
     st.pendingWakeTimer.unref?.();
-    log(`[reserved2] 计划唤醒 ${key}（${reason}），${Math.round(batchMs / 1000)}s 后发送`);
+    const q = adaptive ? quietNeededV2(key, st) : null;
+    log(`[reserved2] 计划唤醒 ${key}（${reason}），${Math.round(batchMs / 100) / 10}s 后发送${q ? `（等对方说完：${Math.round(q.ms / 100) / 10}s，${q.why}）` : ''}`);
   }
 
   /**
@@ -504,8 +521,8 @@ export function createWake(app) {
     link() {
       ({
         FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2,
-        messageMediaStore, nightSleepBlocksV2, playHoldV2, readThroughSeqV2, saveSocialV2State, socialV2,
-        startFreeTimeV2, whenV2
+        messageMediaStore, nightSleepBlocksV2, playHoldV2, quietLeftV2, quietNeededV2, readThroughSeqV2,
+        replyTimingCfgV2, saveSocialV2State, socialV2, startFreeTimeV2, whenV2
       } = app);
     },
     start() {},

@@ -67,7 +67,8 @@ export function createConsoleServer(app) {
     setupSleepTimerV2, slangExtractionCooldowns, slangResearchingIds, slangSubmitTimes,
     slangWindows, socialV2, stickerEnabled, stickerIntentHintV2, suggestQuietMsV2,
     syncStickerLibrary, talkValueOfV2, tellMyselfV2, toUserIdsV2, unseenPlaySentV2, unsentSpeechHintV2, unsentTurnSpeechV2, verifyVoiceMessageSent, voiceBudgetCheck,
-    voiceBudgetCommit, voiceCfg, voiceLibrary, waitAddressedV2, withAgoV2;
+    voiceBudgetCommit, voiceCfg, voiceLibrary, waitAddressedV2, withAgoV2,
+    preSendHoldV2, quietNeededV2, replyTimingCfgV2;
 
   // ── 本地控制台（独立 Web 面板，不依赖 DSH WebUI） ───────────────────────────
   // 模式/角色/静默状态都存 state/*.json，桥接即时感知；此服务只读写这些文件。
@@ -2128,6 +2129,8 @@ export function createConsoleServer(app) {
             }
           }
           if (sentByPlay(key, req.headers['x-agent-token'])) { const denied = playShareGateV2(key); if (denied) { sendJson({ ok: false, error: denied, playShareLimited: true }, 429); return; } }
+          const heldBurst = await preSendHoldV2(key, { drafts: messages, byPlay: sentByPlay(key, req.headers['x-agent-token']) });
+          if (heldBurst) { sendJson(heldBurst); return; }
           const st = getSocialV2State(key);
           const now = Date.now();
           try {
@@ -2264,6 +2267,9 @@ export function createConsoleServer(app) {
               return;
             }
           }
+          // qqbot_agent：发前看一眼——她想好要发的时候对方又说了话，先退回给她看（reply-timing.js）
+          const heldSend = await preSendHoldV2(key, { drafts: messages, replyToMessageId, atUserId, byPlay: sentByPlay(key, req.headers['x-agent-token']) });
+          if (heldSend) { sendJson(heldSend); return; }
           const delays = computeGapsV2(messages, gapMode, gapMs, gaps, sendCfg);
           if (sentByPlay(key, req.headers['x-agent-token'])) { const denied = playShareGateV2(key); if (denied) { sendJson({ ok: false, error: denied, playShareLimited: true }, 429); return; } }
           // 先做发送频率检查并预占额度，再解析引用目标，避免未限流的引用查询打爆 OneBot。
@@ -3380,6 +3386,12 @@ export function createConsoleServer(app) {
           // 新消息里有人 @/引用/叫她，就只再等 addressedQuietMs；第一条新消息后最多再拖 maxExtendAfterNewMs。
           const addressedQuietMs = Math.max(0, Number(waitCfg.addressedQuietMs) || 0);
           const maxExtendAfterNewMs = Math.max(0, Number(waitCfg.maxExtendAfterNewMs) || 0);
+          // qqbot_agent：replyTiming 开着时，等多久按最新那条的人的节奏和内容定（reply-timing.js），每来一条重算；
+          // 她自己填了 quietMs 只能往长了调
+          const rtOn = replyTimingCfgV2().enabled;
+          const askedQuietMs = body.quietMs != null && Number.isFinite(Number(body.quietMs)) ? Math.min(maxQuietMs, Math.max(0, Number(body.quietMs))) : 0;
+          const adaptiveQuietNowMs = () => Math.max(askedQuietMs, quietNeededV2(key, st)?.ms ?? quietMs);
+          let usedQuietMs = quietMs;
           let earlyReturn = '';
           if (st.pendingWakeTimer) {
             clearTimeout(st.pendingWakeTimer);
@@ -3415,9 +3427,11 @@ export function createConsoleServer(app) {
                 observedSeq = st.lastUnreadSeq || 0;
                 lastNewAt = incomingAt();
               }
-              const effQuietMs = addressedQuietMs && addressedQuietMs < quietMs && waitAddressedV2(st, baseline) ? addressedQuietMs : quietMs;
+              const effQuietMs = rtOn ? adaptiveQuietNowMs()
+                : addressedQuietMs && addressedQuietMs < quietMs && waitAddressedV2(st, baseline) ? addressedQuietMs : quietMs;
+              if (rtOn) usedQuietMs = effQuietMs;
               const remaining = effQuietMs - (Date.now() - lastNewAt);
-              if (remaining <= 0) { if (effQuietMs < quietMs) earlyReturn = 'addressed'; break; }
+              if (remaining <= 0) { if (!rtOn && effQuietMs < quietMs) earlyReturn = 'addressed'; break; }
               await sleep(Math.max(1, Math.min(100, remaining, timeoutMs - (Date.now() - start))));
             }
             // A message may arrive during the final sleep, exactly at timeout.
@@ -3432,9 +3446,11 @@ export function createConsoleServer(app) {
               arrived = true;
               const gq = replyGateCfgV2().quietMs;
               const sinceIncoming = Date.now() - (Number(st.lastIncomingAt) || 0);
+              const needMs = rtOn ? adaptiveQuietNowMs() : 0;
+              if (rtOn) usedQuietMs = needMs;
               if (waitAddressedV2(st, baseline)) {
-                if (sinceIncoming >= Math.min(quietMs, addressedQuietMs || quietMs)) { earlyReturn = 'addressed'; break; }
-              } else if (sinceIncoming >= gq && nowSeq !== gateCheckedSeq) {
+                if (sinceIncoming >= (rtOn ? needMs : Math.min(quietMs, addressedQuietMs || quietMs))) { earlyReturn = 'addressed'; break; }
+              } else if (sinceIncoming >= (rtOn ? needMs : gq) && nowSeq !== gateCheckedSeq) {
                 gateCheckedSeq = nowSeq;
                 const batch = gatePendingV2(st, baseline);
                 if (batch.length) {
@@ -3447,19 +3463,22 @@ export function createConsoleServer(app) {
               arrived = true;
               lastNewAt = Date.now();
               const firstNewAt = lastNewAt;
-              let addressed = !!addressedQuietMs && addressedQuietMs < quietMs && waitAddressedV2(st, baseline);
+              let addressed = !rtOn && !!addressedQuietMs && addressedQuietMs < quietMs && waitAddressedV2(st, baseline);
+              let curQuietMs = rtOn ? adaptiveQuietNowMs() : addressed ? addressedQuietMs : quietMs;
               // 已等到新消息：继续等到“最后一条新消息之后 quietMs 内不再有新消息”再返回。
               // 这里不再受原始 timeoutMs 限制，确保对方可能连续发消息时不会抢话。
-              while (Date.now() - lastNewAt < (addressed ? addressedQuietMs : quietMs) && Date.now() - start < timeoutMs + maxQuietMs + 5000 && !aborted) {
+              while (Date.now() - lastNewAt < curQuietMs && Date.now() - start < timeoutMs + maxQuietMs + 5000 && !aborted) {
                 if (maxExtendAfterNewMs && Date.now() - firstNewAt >= maxExtendAfterNewMs) { earlyReturn = 'maxExtend'; break; }
                 if ((st.lastUnreadSeq || 0) > nowSeq) {
                   nowSeq = st.lastUnreadSeq || 0;
                   lastNewAt = Date.now();
-                  if (!addressed && addressedQuietMs && addressedQuietMs < quietMs) addressed = waitAddressedV2(st, baseline);
+                  if (!rtOn && !addressed && addressedQuietMs && addressedQuietMs < quietMs) addressed = waitAddressedV2(st, baseline);
+                  curQuietMs = rtOn ? adaptiveQuietNowMs() : addressed ? addressedQuietMs : quietMs;
                 }
                 await sleep(200);
               }
-              if (!earlyReturn && addressed && !aborted && Date.now() - lastNewAt >= addressedQuietMs) earlyReturn = 'addressed';
+              if (rtOn) usedQuietMs = curQuietMs;
+              if (!earlyReturn && !aborted && Date.now() - lastNewAt >= curQuietMs && (rtOn ? waitAddressedV2(st, baseline) : addressed)) earlyReturn = 'addressed';
               break;
             }
             // qqbot_agent：自由时间那边的她往这里发了东西，先让聊天这边知道（等那一串连发发完，最多 10 秒）
@@ -3490,7 +3509,7 @@ export function createConsoleServer(app) {
             sendJson({ ok: false, error: '等待期间会话已重置或权限已变化，请重新读取会话' }, 403);
             return;
           }
-          const quiet = (replyWait || (arrived && quietMs > 0)) && (Date.now() - lastNewAt >= quietMs);
+          const quiet = (replyWait || (arrived && usedQuietMs > 0)) && (Date.now() - lastNewAt >= usedQuietMs);
           if (!replyWait) saveSocialV2State();
           // Each buffer is governed by its own tool switch: the unread buffer by
           // getUnread, the recent buffer by getRecent. A disabled switch must not leak
@@ -3521,11 +3540,11 @@ export function createConsoleServer(app) {
             purpose: replyWait ? 'reply' : 'messages',
             arrived,
             quiet,
-            quietMs,
+            quietMs: usedQuietMs,
             suggestedQuietMs,
             speakerLikelyDone: quiet,
             lastMessageUnfinished,
-            timeout: replyWait ? !quiet && !earlyReturn : (!arrived && earlyReturn !== 'playSent' && earlyReturn !== 'sleep') || (quietMs > 0 && !quiet && !earlyReturn && Date.now() - start >= timeoutMs),
+            timeout: replyWait ? !quiet && !earlyReturn : (!arrived && earlyReturn !== 'playSent' && earlyReturn !== 'sleep') || (usedQuietMs > 0 && !quiet && !earlyReturn && Date.now() - start >= timeoutMs),
             ...(earlyReturn ? { earlyReturn: { addressed: '有人在叫你、跟你说话（@/引用/叫名字/接你的话），提前返回', maxExtend: '群里一直有人说话，先把已到的消息给你', playSent: '自由时间那边的你刚往这里发了东西，见 yourPlaySelfSent', sleep: '你那边的作息变了，见 yourStatusNow', gate: '这几句像是可以接一下，先给你看看（不是非接不可）' }[earlyReturn] } : {}),
             ...(gatedWait && arrived && !earlyReturn ? { hint: '这些是你等的时候群里的消息，大部分不是对你说的，不用每条都接；有想接的接一句，没有就 qq_mark_read 走开，有人找你会叫你。' } : {}),
             ...(gatedWait && !arrived ? { hint: '没人接话。不用硬补，qq_mark_read 走开就好，有人找你会叫你。' } : {}),
@@ -4244,6 +4263,10 @@ export function createConsoleServer(app) {
           const maxChars = Math.max(1, Number(sendCfg.maxMessageChars) || 500);
           if (message.length > maxChars) { sendJson({ ok: false, error: `单条消息不能超过 ${maxChars} 字` }, 400); return; }
           if (SENSITIVE_RE.test(message)) { sendJson({ ok: false, error: '消息含敏感信息，已阻止发送' }, 403); return; }
+          if (token && app.currentMode === 'reserved2') {
+            const heldOne = await preSendHoldV2(key, { drafts: [message], replyToMessageId, atUserId, byPlay: sentByPlay(key, token) });
+            if (heldOne) { sendJson(heldOne); return; }
+          }
           // st/now 必须声明在 try **之外**：下面的 catch 要用它们回滚预占的发送额度。
           // 写在 try 里时 catch 拿到的是块作用域外的名字 ⇒ ReferenceError（send-burst
           // 曾整段踩过同型问题，见体检报告 #1 / R2）。后果不是"少一行日志"，而是
@@ -4479,7 +4502,8 @@ export function createConsoleServer(app) {
         slangSubmitTimes, slangWindows, socialV2, stickerEnabled, stickerIntentHintV2,
         suggestQuietMsV2, syncStickerLibrary, talkValueOfV2, tellMyselfV2, toUserIdsV2, unseenPlaySentV2, unsentSpeechHintV2, unsentTurnSpeechV2,
         verifyVoiceMessageSent, voiceBudgetCheck, voiceBudgetCommit, voiceCfg, voiceLibrary,
-        waitAddressedV2, withAgoV2
+        waitAddressedV2, withAgoV2,
+        preSendHoldV2, quietNeededV2, replyTimingCfgV2
       } = app);
     },
     start() {},
