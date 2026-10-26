@@ -92,6 +92,7 @@
                 - mcp__snowluma__qq_get_my_recent_messages
                 - mcp__snowluma__qq_set_sticker_remark
                 - mcp__snowluma-host__snowluma_status
+                - mcp__snowluma__qq_tell_myself
           - id: compaction
             name: cordis:group
             group: true

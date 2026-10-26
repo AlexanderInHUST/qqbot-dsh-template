@@ -99,6 +99,8 @@
       - mcp__snowluma__qq_get_my_recent_messages
       - mcp__snowluma__qq_set_sticker_remark
       - mcp__snowluma-host__snowluma_status
+      # 捎话只能从私聊和家里的小群发
+      - mcp__snowluma__qq_tell_myself
 
 # ── 上下文管理（保留，避免长聊爆上下文） ────────────────────────────────────
 

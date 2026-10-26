@@ -113,11 +113,12 @@
 
 ### 说的话前后对得上
 
-模型很容易说一套做一套：“我这就去画”然后没去，“他一睡我就告诉你”然后忘了。这里做了三件事：
+模型很容易说一套做一套：“我这就去画”然后没去，“他一睡我就告诉你”然后忘了。这里做了四件事：
 
 - **自检**：她发完话，extras 拿这段话和她之前说过的、实际做过的对一下（`/self/check`）。说岔了，正在聊就插一句【说岔了】让她自己圆回来，不在聊就留到下次唤醒。
 - **提醒**：她能给自己定闹钟（`qq_remind_me`），到点叫醒她；也能“等某个人说话再叫我”。
 - **承诺提示**：她说了“待会儿再…”却没定提醒、也没托给去玩的自己，发送结果里会提醒她一次。
+- **捎话给别的窗口**：每个群、私聊、自由时间都是各自的会话，私聊里答应了“不玩了”，大群和电脑那边并不知道。主人在私聊或家里的群里让她做的事牵涉到别处时，她用 `qq_tell_myself` 捎过去：那边正聊着就插一句，不在聊就等那边下次被叫醒时看到。`stopPlay` 让电脑那边马上收尾，一段时间内不去玩。大群里不能用，免得被群友带着改别处的事。
 
 ### 她的电脑
 
@@ -260,10 +261,10 @@ bridge 校验令牌、白名单、发送限额，按“像人打字”的节奏�
 | 位置 | 内容 |
 |---|---|
 | `src/bridge.js` | 入口：连 SnowLuma、收发消息、管理命令、会话管理、老功能（约 5 千行） |
-| `src/app/` | 二代社交，18 个模块，每个是 `createX(app)`，返回 `{exports, link(), start()}` |
+| `src/app/` | 二代社交，19 个模块，每个是 `createX(app)`，返回 `{exports, link(), start()}` |
 | `src/app/wake.js`、`wake-triggers.js`、`wake-prompt.js` | 唤醒：叫不叫、怎么合并、提示词怎么拼 |
 | `src/app/v2-state.js`、`v2-messages.js` | 每个会话的状态、消息列表、已读位置 |
-| `src/app/self-now.js`、`self-check.js`、`life.js` | 【你现在】、自检、心情、生活、主动找人 |
+| `src/app/self-now.js`、`self-check.js`、`life.js`、`tell-myself.js` | 【你现在】、自检、心情、生活、主动找人、捎话给别的窗口 |
 | `src/app/free-time.js`、`reminders.js`、`night-sleep.js`、`idle-compact.js` | 自由时间、提醒、睡觉、闲时压缩 |
 | `src/app/human-send.js`、`media.js`、`stickers.js`、`voice.js`、`slang.js` | 发话、图片、表情包、语音、黑话 |
 | `src/app/console-server.js` | 控制台网页和给 MCP 调的 `/api/socialV2/*` |

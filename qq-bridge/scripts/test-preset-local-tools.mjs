@@ -287,7 +287,13 @@ test('hideTools 里的工具 MCP 连上后从清单里藏起来，执行时也�
   }
   const play = fs.readFileSync(path.join(PRESETS_DIR, 'qq-play', 'agent.cordis.yml'), 'utf8');
   const playListed = [...play.matchAll(/^\s+-\s+(mcp__[\w-]+__\w+)\s*$/gm)].map((m) => m[1]);
-  assert.deepEqual(playListed.sort(), [...listed].sort(), 'qq-play 和 qq-chat-v2 藏的一样');
+  // 只有 qq_tell_myself 是 qq-play 多藏的（捎话只能从私聊和家里的小群发）
+  const PLAY_ONLY = ['mcp__snowluma__qq_tell_myself'];
+  assert.deepEqual(playListed.filter((n) => !PLAY_ONLY.includes(n)).sort(), [...listed].sort(), 'qq-play 和 qq-chat-v2 藏的一样');
+  for (const n of PLAY_ONLY) {
+    assert.ok(playListed.includes(n), `qq-play 藏起 ${n}`);
+    assert.ok(!listed.includes(n), `qq-chat-v2 不藏 ${n}`);
+  }
 
   const mod = await import(pathToFileURL(path.join(dir, 'qq-tool-restrict.mjs')).href);
   const known = new Set(['mcp__snowluma__qq_send_message']);

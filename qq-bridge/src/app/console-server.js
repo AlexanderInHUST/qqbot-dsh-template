@@ -55,7 +55,7 @@ export function createConsoleServer(app) {
     invalidateSlangLearnerSession, isConversationBusyV2, isNightSleepV2, isSleepingConfigV2,
     markPlaySentShownV2, mergeBubblesV2, mergedHintV2, messageMediaStore, mimeFromBuffer,
     mimeFromUrl, modelImageV2, normalizeSpeakerIdsV2, noteModelMessagesV2, notePlayLogV2, ownerAwakeV2,
-    personCardsV2, pickWakeTriggersV2, playSentViewV2, playShareGateV2, promiseHintV2,
+    personCardsV2, pickWakeTriggersV2, playHoldBlocksV2, playSentViewV2, playShareGateV2, promiseHintV2,
     publicSlangEntry, queueSlangTask, readFeedbackEntries, readThroughSeqV2, readToolLog,
     recordSentMessagesV2, refreshAllDefaultWakeConfigsV2, releaseNotSentV2, remindMeV2,
     replyGateCfgV2, replyGateOfV2, replyGateOnV2, replyTimingV2, requestedReadThroughSeqV2,
@@ -66,7 +66,7 @@ export function createConsoleServer(app) {
     sendVoiceForV2, sendVoiceV2, sendWakePromptV2, setInitialPrompt, setStickerRemarkV2,
     setupSleepTimerV2, slangExtractionCooldowns, slangResearchingIds, slangSubmitTimes,
     slangWindows, socialV2, stickerEnabled, stickerIntentHintV2, suggestQuietMsV2,
-    syncStickerLibrary, talkValueOfV2, toUserIdsV2, unseenPlaySentV2, unsentSpeechHintV2, unsentTurnSpeechV2, verifyVoiceMessageSent, voiceBudgetCheck,
+    syncStickerLibrary, talkValueOfV2, tellMyselfV2, toUserIdsV2, unseenPlaySentV2, unsentSpeechHintV2, unsentTurnSpeechV2, verifyVoiceMessageSent, voiceBudgetCheck,
     voiceBudgetCommit, voiceCfg, voiceLibrary, waitAddressedV2, withAgoV2;
 
   // ── 本地控制台（独立 Web 面板，不依赖 DSH WebUI） ───────────────────────────
@@ -1389,7 +1389,7 @@ export function createConsoleServer(app) {
             }
           }
           // tools：只接受布尔开关
-          const toolFlags = ['getPrompt', 'getUnread', 'getRecent', 'socialState', 'sendGroup', 'sendPrivate', 'reply', 'sendBurst', 'sendMessage', 'waitMessages', 'feedback', 'getMyRecent', 'getMessageDetail', 'getActiveMembers', 'setWakeConfig', 'markRead', 'memory', 'slangQuery', 'slangSubmit', 'getImages', 'getForwardMsg', 'sendPoke', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendScreenshot', 'sendMeme', 'goPlay', 'sendVoice', 'setMood', 'goToSleep', 'remindMe'];
+          const toolFlags = ['getPrompt', 'getUnread', 'getRecent', 'socialState', 'sendGroup', 'sendPrivate', 'reply', 'sendBurst', 'sendMessage', 'waitMessages', 'feedback', 'getMyRecent', 'getMessageDetail', 'getActiveMembers', 'setWakeConfig', 'markRead', 'memory', 'slangQuery', 'slangSubmit', 'getImages', 'getForwardMsg', 'sendPoke', 'listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker', 'getSelfImage', 'sendScreenshot', 'sendMeme', 'goPlay', 'sendVoice', 'setMood', 'goToSleep', 'remindMe', 'tellMyself'];
           if (body.tools && typeof body.tools === 'object') {
             merged.tools = { ...(current.tools ?? {}), ...body.tools };
             for (const k of toolFlags) {
@@ -1659,7 +1659,8 @@ export function createConsoleServer(app) {
             goPlay: 'qq_go_play',
             setMood: 'qq_set_mood',
             goToSleep: 'qq_go_to_sleep',
-            remindMe: 'qq_remind_me'
+            remindMe: 'qq_remind_me',
+            tellMyself: 'qq_tell_myself'
           };
           const tools = cfg.socialV2?.tools ?? {};
           const stickerToolFlags = new Set(['listStickers', 'getStickerImage', 'sendSticker', 'setStickerRemark', 'stickerNote', 'collectSticker']);
@@ -2920,6 +2921,9 @@ export function createConsoleServer(app) {
           if (!playEnabledV2()) { sendJson({ ok: false, error: '自由时间会话已关闭' }, 403); return; }
           if (isNightSleepV2() && !ownerAwakeV2(key)) { sendJson({ ok: false, error: '现在是睡觉时间，明天再去玩吧' }, 403); return; }
           if (SENSITIVE_RE.test(note)) { sendJson({ ok: false, error: '内容含敏感信息' }, 403); return; }
+          // 在别的窗口答应了先不玩（qq_tell_myself 的 stopPlay）：主人在私聊或家里的群又让她去玩才放行
+          const held = playHoldBlocksV2(key);
+          if (held) { log(`[goPlay] ${key} 想托去玩，被拦：答应了先不玩`); sendJson({ ok: false, error: held }, 403); return; }
           const playSt = getSocialV2State(PLAY_KEY);
           if (!Array.isArray(playSt.playRequests)) playSt.playRequests = [];
           // 主人 5 分钟内在那个会话说过话，就算主人托的（play 那边只有这种才会用 B 站账号点赞、关注之类）
@@ -2953,6 +2957,20 @@ export function createConsoleServer(app) {
           if (how === 'wake') await sendWakePromptV2(PLAY_KEY, 'goPlay');
           log(`[goPlay] ${key} 托自由时间去：${note}（${how}${ownerAsked ? '，主人托的' : ''}${minutes ? `，说好玩 ${minutes} 分钟` : ''}）`);
           sendJson({ ok: true, key, queued: true, hint: `已经交给“去玩的你”了，${minutes ? '那边会多玩一会儿，玩的时候会把截图、进展发过来' : '那边会自己去做，看到好东西会直接发过来'}。那边用的是另一台电脑，你这边浏览器里开着的页面不会跟过去，要从头开始。这边接着聊，不用等。` });
+          return;
+        }
+
+        // qqbot_agent：私聊、家里的群里主人让她做的事牵涉到别的窗口（“别玩了”）：捎给那边的自己（见 tell-myself.js）
+        if (req.method === 'POST' && url.pathname === '/api/socialV2/tell-myself') {
+          const body = await readBody();
+          const key = String(body.key ?? '').trim();
+          const token = req.headers['x-agent-token'];
+          if (!key) { sendJson({ ok: false, error: 'key 不能为空' }, 400); return; }
+          if (!token || !agentTokenOk(key, token)) { sendJson({ ok: false, error: 'agent token 无效' }, 403); return; }
+          if (!v2SessionAllowed(key)) { sendJson({ ok: false, error: '目标不在当前模式允许范围内' }, 403); return; }
+          if (!v2ToolEnabled('tellMyself')) { sendJson({ ok: false, error: '工具未启用：qq_tell_myself' }, 403); return; }
+          const result = await tellMyselfV2(key, body);
+          sendJson(result, result.ok ? 200 : result.status || 400);
           return;
         }
 
@@ -4448,7 +4466,7 @@ export function createConsoleServer(app) {
         initialPrompts, interruptHintV2, invalidateSlangLearnerSession, isConversationBusyV2,
         isNightSleepV2, isSleepingConfigV2, markPlaySentShownV2, mergeBubblesV2, mergedHintV2,
         messageMediaStore, mimeFromBuffer, mimeFromUrl, modelImageV2, normalizeSpeakerIdsV2,
-        noteModelMessagesV2, notePlayLogV2, ownerAwakeV2, personCardsV2, pickWakeTriggersV2, playSentViewV2,
+        noteModelMessagesV2, notePlayLogV2, ownerAwakeV2, personCardsV2, pickWakeTriggersV2, playHoldBlocksV2, playSentViewV2,
         playShareGateV2, promiseHintV2, publicSlangEntry, queueSlangTask, readFeedbackEntries,
         readThroughSeqV2, readToolLog, recordSentMessagesV2, refreshAllDefaultWakeConfigsV2,
         releaseNotSentV2, remindMeV2, replyGateCfgV2, replyGateOfV2, replyGateOnV2, replyTimingV2,
@@ -4459,7 +4477,7 @@ export function createConsoleServer(app) {
         sendStickerV2, sendVoiceForV2, sendVoiceV2, sendWakePromptV2, setInitialPrompt,
         setStickerRemarkV2, setupSleepTimerV2, slangExtractionCooldowns, slangResearchingIds,
         slangSubmitTimes, slangWindows, socialV2, stickerEnabled, stickerIntentHintV2,
-        suggestQuietMsV2, syncStickerLibrary, talkValueOfV2, toUserIdsV2, unseenPlaySentV2, unsentSpeechHintV2, unsentTurnSpeechV2,
+        suggestQuietMsV2, syncStickerLibrary, talkValueOfV2, tellMyselfV2, toUserIdsV2, unseenPlaySentV2, unsentSpeechHintV2, unsentTurnSpeechV2,
         verifyVoiceMessageSent, voiceBudgetCheck, voiceBudgetCommit, voiceCfg, voiceLibrary,
         waitAddressedV2, withAgoV2
       } = app);

@@ -38,6 +38,8 @@ export function createV2State(app) {
     reminders: [], // qqbot_agent：她用 qq_remind_me 记的“待会儿要做的事” [{ id, key, note, at, due, firedAt?, shownAt? }]，见 reminderTickV2
     playSessions: [], // qqbot_agent：每次自由时间的起止 [{ start, end, reason }]，最近 36 小时，【你现在】里列“今天上电脑玩了几回”
     selfClaims: [], // qqbot_agent：她在各处说过的自己的事 [{ at, key, text }]（selfCheck 从她发的话里抽的），见 selfClaimsLineV2
+    tellNotes: [], // qqbot_agent：别的窗口捎来、还没给那边看过的话 [{ id, from, to, note, at }]，见 tell-myself.js
+    playHold: null, // qqbot_agent：答应了先不玩 { from, at, until, note? }，到 until 前不去自由时间，见 playHoldV2
   };
   const REMINDERS_MAX = 60;
   const PLAY_SESSIONS_MAX = 30;
@@ -286,6 +288,8 @@ export function createV2State(app) {
         ? raw.playSessions.filter((x) => x && Number(x.start) > 0).map((x) => ({ start: Number(x.start), end: Number(x.end) || 0, reason: String(x.reason || '') })).slice(-PLAY_SESSIONS_MAX)
         : backfillPlaySessionsV2(); // 升级前没记：从 freeTimeHistory 和 playLog 推一份
       socialV2.selfClaims = Array.isArray(raw?.selfClaims) ? raw.selfClaims.filter((x) => x && typeof x.text === 'string' && Number(x.at) > 0).slice(-SELF_CLAIMS_MAX) : [];
+      socialV2.tellNotes = Array.isArray(raw?.tellNotes) ? raw.tellNotes.filter((x) => x && typeof x.to === 'string' && typeof x.note === 'string' && Number(x.at) > 0).slice(-30) : [];
+      socialV2.playHold = raw?.playHold && Number(raw.playHold.until) > Date.now() ? { from: String(raw.playHold.from || ''), at: Number(raw.playHold.at) || 0, until: Number(raw.playHold.until), ...(raw.playHold.note ? { note: String(raw.playHold.note).slice(0, 150) } : {}) } : null;
       socialV2.lastPlaySay = raw?.lastPlaySay && typeof raw.lastPlaySay.text === 'string' ? { at: Number(raw.lastPlaySay.at) || 0, text: raw.lastPlaySay.text.slice(0, 300) } : null;
       socialV2.replyGates = Object.create(null);
       for (const [k, g] of Object.entries(raw?.replyGates && typeof raw.replyGates === 'object' ? raw.replyGates : {})) {
@@ -411,7 +415,7 @@ export function createV2State(app) {
   function flushSocialV2State() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     try {
-      const obj = { paused: socialV2.paused, freeTimeHistory: socialV2.freeTimeHistory.slice(-20), watchedVideos: socialV2.watchedVideos, readPages: (socialV2.readPages || []).slice(-READ_PAGES_MAX), selfAvatar: socialV2.selfAvatar, proactiveNextAt: socialV2.proactiveNextAt, playShares: (socialV2.playShares || []).slice(-100), mood: socialV2.mood, sleptAt: socialV2.sleptAt || 0, sleptKey: socialV2.sleptKey || '', playLog: (socialV2.playLog || []).slice(-PLAY_LOG_MAX), playStartedAt: socialV2.playStartedAt || 0, playEndedAt: socialV2.playEndedAt || 0, lastPlaySay: socialV2.lastPlaySay, replyGates: socialV2.replyGates, life: socialV2.life, reminders: (socialV2.reminders || []).slice(-REMINDERS_MAX), playSessions: (socialV2.playSessions || []).slice(-PLAY_SESSIONS_MAX), selfClaims: (socialV2.selfClaims || []).slice(-SELF_CLAIMS_MAX), conversations: Object.create(null) };
+      const obj = { paused: socialV2.paused, freeTimeHistory: socialV2.freeTimeHistory.slice(-20), watchedVideos: socialV2.watchedVideos, readPages: (socialV2.readPages || []).slice(-READ_PAGES_MAX), selfAvatar: socialV2.selfAvatar, proactiveNextAt: socialV2.proactiveNextAt, playShares: (socialV2.playShares || []).slice(-100), mood: socialV2.mood, sleptAt: socialV2.sleptAt || 0, sleptKey: socialV2.sleptKey || '', playLog: (socialV2.playLog || []).slice(-PLAY_LOG_MAX), playStartedAt: socialV2.playStartedAt || 0, playEndedAt: socialV2.playEndedAt || 0, lastPlaySay: socialV2.lastPlaySay, replyGates: socialV2.replyGates, life: socialV2.life, reminders: (socialV2.reminders || []).slice(-REMINDERS_MAX), playSessions: (socialV2.playSessions || []).slice(-PLAY_SESSIONS_MAX), selfClaims: (socialV2.selfClaims || []).slice(-SELF_CLAIMS_MAX), tellNotes: (socialV2.tellNotes || []).slice(-30), playHold: socialV2.playHold || null, conversations: Object.create(null) };
       for (const [key, st] of socialV2.conversations) {
         obj.conversations[key] = {
           wakeConfig: st.wakeConfig,

@@ -354,6 +354,7 @@ const TOOL_CONFIG_FLAGS = {
   qq_set_mood: 'setMood',
   qq_go_to_sleep: 'goToSleep',
   qq_remind_me: 'remindMe',
+  qq_tell_myself: 'tellMyself',
 };
 const disabledTools = [];
 {
@@ -1289,6 +1290,32 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `没记上：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_tell_myself',
+  '你在每个聊天窗口、电脑那边都是分开的，这里说好的事别处的你不知道。主人在这里（私聊或家里的小群）让你做的事牵涉到别的窗口时（“别玩了”“去群里跟大家说一声”“那边别再发图了”），用它捎给那边的你：那边正聊着会马上看到，不在聊就等那边下次被叫醒时看到（不会专门叫醒）。让你别玩了就填 stopPlay=true：电脑那边在玩的你马上收尾，之后一段时间不去玩，有人托你去玩也会被拦；在大群里陪人玩着的，再用 to 捎一句让那边跟大家说一声。note 只写那边要做什么，别写这里聊了什么。只能在私聊和家里的小群用，而且得是主人刚说的。',
+  {
+    key: z.string().describe('当前聊天的会话 key'),
+    token: z.string().describe('当前聊天的会话令牌'),
+    to: z.string().optional().describe('捎给哪：那个聊天的 key（比如 "group:123"），"play:main" 是电脑那边，"all" 是别的所有聊天窗口；只 stopPlay 可以不填'),
+    note: z.string().optional().describe('那边要做什么，写给那边的自己，比如“先不玩了，跟大家说一声晚点再玩”，最多 150 字'),
+    stopPlay: z.boolean().optional().describe('答应了先不玩：电脑那边马上收尾，一段时间内不去玩'),
+    minutes: z.number().optional().describe('stopPlay 时多久不去玩（10~360），不填是 60')
+  },
+  async ({ key, token, to, note, stopPlay, minutes }) => {
+    try {
+      const data = await agentApi('/api/socialV2/tell-myself', {
+        method: 'POST',
+        body: JSON.stringify({ key, to: to || '', note: note || '', ...(stopPlay ? { stopPlay: true } : {}), ...(minutes ? { minutes } : {}) }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 60000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `没捎过去：${error?.message ?? error}` }], isError: true };
     }
   }
 );

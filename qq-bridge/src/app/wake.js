@@ -11,8 +11,8 @@ export function createWake(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2,
-    messageMediaStore, nightSleepBlocksV2, readThroughSeqV2, saveSocialV2State, socialV2,
-    startFreeTimeV2;
+    messageMediaStore, nightSleepBlocksV2, playHoldV2, readThroughSeqV2, saveSocialV2State, socialV2,
+    startFreeTimeV2, whenV2;
 
   // qqbot_agent：模型偶尔把工具参数 JSON 写坏（DeepSeek 报 MALFORMED_RESPONSE “tool input is invalid JSON”），
   // 回合直接报错结束、她手上的事就断了。这里自动让她接着做，连续最多 socialV2.malformedRetry.max 次（默认 2），
@@ -425,6 +425,8 @@ export function createWake(app) {
     const next = Math.round((socialV2.proactiveNextAt - Date.now()) / 60000);
     if (isNightSleepV2()) { log(`[reserved2] 自由时间检查：睡觉时间，跳过；下次约 ${next}min 后`); return; }
     if (isConversationBusyV2(PLAY_KEY, st)) { log(`[reserved2] 自由时间检查：还在玩，跳过；下次约 ${next}min 后`); return; }
+    const hold = playHoldV2();
+    if (hold) { log(`[reserved2] 自由时间检查：答应了先不玩（到 ${whenV2(hold.until)}），跳过；下次约 ${next}min 后`); return; }
     const prob = proactiveProbabilityV2(st);
     const go = Math.random() < prob;
     log(`[reserved2] 自由时间检查：概率 ${prob.toFixed(2)}，${go ? '去玩' : '这次不玩'}；下次约 ${next}min 后`);
@@ -492,6 +494,7 @@ export function createWake(app) {
       isTimerWakeReason,
       replayPendingWakeReasonsV2,
       retryMalformedTurnV2,
+      runGlobalProactiveCheckV2,
       scheduleProactiveCheckV2,
       scheduleWakeV2,
       sendWakePromptV2,
@@ -501,8 +504,8 @@ export function createWake(app) {
     link() {
       ({
         FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2,
-        messageMediaStore, nightSleepBlocksV2, readThroughSeqV2, saveSocialV2State, socialV2,
-        startFreeTimeV2
+        messageMediaStore, nightSleepBlocksV2, playHoldV2, readThroughSeqV2, saveSocialV2State, socialV2,
+        startFreeTimeV2, whenV2
       } = app);
     },
     start() {},

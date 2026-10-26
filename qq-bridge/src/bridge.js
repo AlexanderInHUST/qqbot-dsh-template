@@ -78,6 +78,7 @@ import { createSelfNow } from './app/self-now.js';
 import { createLife } from './app/life.js';
 import { createReminders } from './app/reminders.js';
 import { createSelfCheck } from './app/self-check.js';
+import { createTellMyself } from './app/tell-myself.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -3097,6 +3098,7 @@ async function main() {
       return { ok: false, error: safeErrText };
     }
     if (opts.wakeReason && key !== PLAY_KEY) { markRemindersShownV2(key); markSelfCheckShownV2(key); }
+    if (opts.wakeReason) app.markTellShownV2(key);
     if (opts.wakeReason && key === PLAY_KEY && app.playPromptRequests.length) {
       for (const r of app.playPromptRequests) r.done = true;
       app.playPromptRequests = [];
@@ -4858,6 +4860,7 @@ async function main() {
     createLife(app),
     createReminders(app),
     createSelfCheck(app),
+    createTellMyself(app),
   ];
   for (const m of appModules) Object.defineProperties(app, Object.getOwnPropertyDescriptors(m.exports));
   for (const m of appModules) m.link();

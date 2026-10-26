@@ -19,7 +19,8 @@ export function createWakePrompt(app) {
   // 别的模块里的，等都装好了在 link() 里拿
   let MAX_MEDIA_BYTES, acceptImageBuffer, addressedGroupV2, freeTimeIdeasLineV2, freeTimeNudgeTextV2, getSocialV2State,
     isConversationBusyV2, isNightSleepV2, lifeCfgV2, minutesAgoTextV2, nightSleepLineV2,
-    reminderPromptLineV2, replyOnlyGroupV2, saveSocialV2State, selfCheckPromptLineV2, selfNowBlockV2, socialV2;
+    reminderPromptLineV2, replyOnlyGroupV2, saveSocialV2State, selfCheckPromptLineV2, selfNowBlockV2, socialV2,
+    tellPromptLineV2;
 
   // ── 二代仿真：操作者预写的「初始提示词」（每个会话一份，只在首次唤醒时注入） ──────
   //
@@ -663,7 +664,7 @@ export function createWakePrompt(app) {
       ? `【有人托你】先做这些，做完把结果发回对应的聊天（key 填那个聊天）：\n${requests.map((r) => `- ${whenV2(r.at)} 在${convLabelV2(r.from, socialV2.conversations.get(r.from))}（${r.from}）${r.ownerAsked ? '【主人托的】' : ''}${r.minutes ? '（说好多玩一会儿）' : ''}：${defang(r.note)}`).join('\n')}\n\n`
       : '';
     const nightLine = isNightSleepV2() ? '【现在是睡觉时间】你是被叫起来的，办完托你的事就早点收尾。\n\n' : '';
-    const head = `${roleLine}${selfIdentityTextV2()}${tokenLine}${selfNowBlockV2(PLAY_KEY, st)}${nightLine}${chatsLine}`;
+    const head = `${roleLine}${selfIdentityTextV2()}${tokenLine}${selfNowBlockV2(PLAY_KEY, st)}${nightLine}${chatsLine}${tellPromptLineV2(PLAY_KEY)}`;
     if (reason === 'goPlay') {
       if (requests.some((r) => r.minutes)) {
         return `${head}${requestLine}【去玩】${PLAY_KEY}\n你从聊天那边过来的，说好了要多玩一会儿：一直玩到【可以歇了】，中途挑一两个好玩的时候截图发回托你的那个聊天。这台电脑和聊天那边的浏览器不是同一台，要从头开始玩。`;
@@ -732,7 +733,7 @@ export function createWakePrompt(app) {
     // 操作者预写的「初始提示词」：只在首次唤醒注入，之后它已经在会话上下文里了
     const initialPromptText = reason === 'bootstrap' ? formatInitialPromptV2(key) : '';
     const initialPromptLine = initialPromptText ? `${initialPromptText}\n\n` : '';
-    const reminderLine = reminderPromptLineV2(key) + selfCheckPromptLineV2(key);
+    const reminderLine = reminderPromptLineV2(key) + selfCheckPromptLineV2(key) + tellPromptLineV2(key);
     // 这次的情况：上次在这里说话是多久以前、最后一句像没说完
     const extra = [];
     if (st.lastAiReplyAt) extra.push(`你上次在这里说话是${minutesAgoTextV2(st.lastAiReplyAt, Date.now())}`);
@@ -821,7 +822,7 @@ export function createWakePrompt(app) {
         MAX_MEDIA_BYTES, acceptImageBuffer, addressedGroupV2, freeTimeIdeasLineV2, freeTimeNudgeTextV2,
         getSocialV2State, isConversationBusyV2, isNightSleepV2, lifeCfgV2, minutesAgoTextV2,
         nightSleepLineV2, reminderPromptLineV2, replyOnlyGroupV2, saveSocialV2State, selfCheckPromptLineV2,
-        selfNowBlockV2, socialV2
+        selfNowBlockV2, socialV2, tellPromptLineV2
       } = app);
     },
     start() {

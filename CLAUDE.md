@@ -24,10 +24,10 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 
 ### 代码结构
 
-- qq-bridge/src/bridge.js 是入口和老功能，约 5 千行。二代社交那部分在 qq-bridge/src/app/ 下 18 个模块，每个是 `createX(app)` 返回 `{exports, link(), start()}`：
+- qq-bridge/src/bridge.js 是入口和老功能，约 5 千行。二代社交那部分在 qq-bridge/src/app/ 下 19 个模块，每个是 `createX(app)` 返回 `{exports, link(), start()}`：
   - wake / wake-triggers / wake-prompt：唤醒、门控、提示；
   - v2-state / v2-messages：状态和消息；
-  - self-now / self-check / life：她的状态、自洽、心情和生活；
+  - self-now / self-check / life / tell-myself：她的状态、自洽、心情和生活、捎话给别的窗口；
   - free-time / reminders / night-sleep / idle-compact；
   - human-send / media / stickers / voice / slang；
   - console-server。
@@ -129,6 +129,11 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 提醒 `qq_remind_me(key, token, note, minutes 或 at, cancel)`（`tools.remindMe`）：到点在聊就 steer【到点了】，不在就用 `reminder` 叫醒，夜里不叫。`waitFor` / `waitWords` / `waitIn`（`remindWait`）是等某个人说话再叫。日志 `grep '\[提醒\]'`。
   - `promiseHint`：她说了“待会儿再…”、“他一睡我就告诉你”（`conditional`）、“我这就去画”（`goDo`）却没记提醒、也没托 qq_go_play，发送结果里提醒她一次。
   - 聊天会话一轮里调聊天浏览器满 12 次，steer【交给去玩的你】（`chatBrowserHandoff`）。
+  - 捎话 `qq_tell_myself(key, token, to, note, stopPlay?, minutes?)`（`tools.tellMyself`，src/app/tell-myself.js）：主人在这里让她做的事牵涉到别的窗口时，她自己捎过去。
+    - 只能从私聊和家里的群发，而且要主人 `tellMyself.ownerMinutes` 5 分钟内在这里说过话；大群、play:main 都拒（qq-play 也在 hideTools 里藏了）。
+    - to 是会话 key、`play:main` 或 `all`（除了这里和 play 的所有窗口）。那边正跑着一轮就 steer【捎给自己的话】；不在就记进 `socialV2.tellNotes`（每处 3 条、留 `keepHours` 6 小时），下次那边被叫醒时写进唤醒提示，不专门叫醒。家里以外的群看到的是“在别处答应了”。
+    - `stopPlay`：记 `socialV2.playHold`（`minutes` 10~360，默认 `holdMinutes` 60，只延长不缩短）。play 正在玩就 steer【先不玩了】、不再劝接着玩；到点前自由时间检查跳过、qq_go_play 拒、play 不往聊天里分享，【你现在】里写着“答应了先不玩”。主人在私聊或家里的群、说好以后又说过话再托 qq_go_play，就解除。
+    - 日志 `grep '\[捎话\]'`。
 
 ### 自由时间
 

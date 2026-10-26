@@ -11,7 +11,7 @@ export function createSelfNow(app) {
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, PLAY_LAST_ITEM_MS, convLabelV2, crossSessionCountOnlyV2,
     crossSessionSummaryOnlyV2, whenV2, isConversationBusyV2, lifeLinesV2, moodEngineCfgV2,
-    nightCfgOkV2, playSessionsTextV2, selfClaimsLineV2, selfSleptV2, sleepStateV2, socialV2,
+    nightCfgOkV2, playHoldLineV2, playSessionsTextV2, selfClaimsLineV2, selfSleptV2, sleepStateV2, socialV2,
     todayPlaySessionsV2;
 
   // ── qqbot_agent：【你现在】她此刻的状态，所有会话（几个聊天 + 自由时间）看到的是同一份 ─────────────
@@ -108,6 +108,9 @@ export function createSelfNow(app) {
     } else if (sleep.kind === 'awake' && !(socialV2.playStartedAt >= sleep.wokeAt)) {
       lines.push('- 电脑：今天还没上电脑玩过。');
     }
+    // 答应了先不玩（别的窗口用 qq_tell_myself 捎来的）
+    const hold = playHoldLineV2(key, now);
+    if (hold) lines.push(hold);
     const sessions = todayPlaySessionsV2(sleep, now);
     if (sessions.length) {
       const mins = sessions.reduce((n, x) => n + Math.max(1, Math.round(((x.end || now) - x.start) / 60000)), 0);
@@ -152,7 +155,7 @@ export function createSelfNow(app) {
     lines.push(...life);
     const claims = selfClaimsLineV2(key, sleep, now);
     if (claims) lines.push(claims);
-    const sig = JSON.stringify([sleep.kind, sleep.awakeKeys || [], playing, page, lastItem?.at || 0, mood?.at || 0, phase, chats.busy, body, life, sessions.length, claims]);
+    const sig = JSON.stringify([sleep.kind, sleep.awakeKeys || [], playing, page, lastItem?.at || 0, mood?.at || 0, phase, chats.busy, body, life, sessions.length, claims, hold]);
     // 网页标题、心情原因、她说过的话都可能带【】，别让它们看着像一段提示
     return { lines: lines.map(defang), sig };
   }
@@ -182,7 +185,7 @@ export function createSelfNow(app) {
       ({
         FREE_TIME_REASONS, PLAY_LAST_ITEM_MS, convLabelV2, crossSessionCountOnlyV2,
         crossSessionSummaryOnlyV2, whenV2, isConversationBusyV2, lifeLinesV2, moodEngineCfgV2,
-        nightCfgOkV2, playSessionsTextV2, selfClaimsLineV2, selfSleptV2, sleepStateV2, socialV2,
+        nightCfgOkV2, playHoldLineV2, playSessionsTextV2, selfClaimsLineV2, selfSleptV2, sleepStateV2, socialV2,
         todayPlaySessionsV2
       } = app);
     },

@@ -9,7 +9,7 @@ export function createFreeTime(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let PLAY_SESSIONS_KEEP_MS, PLAY_SESSIONS_MAX, convLabelV2, whenV2, isConversationBusyV2,
-    isNightSleepV2, lifeCfgV2, moodEngineCfgV2, replyOnlyGroupV2, saveSocialV2State, socialV2;
+    isNightSleepV2, lifeCfgV2, moodEngineCfgV2, playHoldV2, replyOnlyGroupV2, saveSocialV2State, socialV2;
 
   // qqbot_agent：自由时间（主动机会唤醒）。只要这段时间里没人来找、她也没发言，就算还在“自己玩”。
   const FREE_TIME_REASONS = new Set(['proactiveCheck', 'goPlay']);
@@ -467,6 +467,11 @@ export function createFreeTime(app) {
     const play = socialV2.conversations.get(PLAY_KEY);
     const asked = (Array.isArray(play?.playRequests) ? play.playRequests : []).some((r) => r.from === key && now - Number(r.at) < 6 * 3600 * 1000);
     const denied = (why, tail = '别人收到太多会烦。') => `这会儿先不发了：${why}。${tail}把它用 memory_note 记下来，以后聊天时自然提起就好；不要换个工具重试，接着玩。`;
+    // 答应了先不玩（qq_tell_myself 的 stopPlay）：电脑那边不往聊天里发，聊天那边的她会自己跟大家说
+    if (playHoldV2()) {
+      log(`[reserved2] 自由时间分享被拦 ${key}：答应了先不玩`);
+      return denied('你答应了先不玩了，聊天那边的你会跟大家说', '');
+    }
     // socialV2.replyOnlyGroups：这些群只在有人找她时说话，自由时间里不往这里分享（有人托的照发，限频关了也拦）
     if (!asked && replyOnlyGroupV2(key)) {
       log(`[reserved2] 自由时间分享被拦 ${key}：只在有人找时说话`);
@@ -528,7 +533,7 @@ export function createFreeTime(app) {
     link() {
       ({
         PLAY_SESSIONS_KEEP_MS, PLAY_SESSIONS_MAX, convLabelV2, whenV2, isConversationBusyV2,
-        isNightSleepV2, lifeCfgV2, moodEngineCfgV2, replyOnlyGroupV2, saveSocialV2State, socialV2
+        isNightSleepV2, lifeCfgV2, moodEngineCfgV2, playHoldV2, replyOnlyGroupV2, saveSocialV2State, socialV2
       } = app);
     },
     start() {
