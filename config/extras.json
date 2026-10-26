@@ -1,0 +1,65 @@
+{
+  "telegram": {
+    "channels": ["woshadiao"],
+    "postsPerBrowse": 10
+  },
+  "relay": {
+    "conversations": ["group:1100000001", "group:800000002", "group:1100000003", "group:1000000004", "private:900000001"],
+    "perConversationPerDay": 3,
+    "minIntervalMinutes": 120,
+    "globalPerDay": 20,
+    "postsPerBatch": 3,
+    "batchWindowMinutes": 15,
+    "quietHours": [0, 8],
+    "maxImagesPerRelay": 3,
+    "captionMaxChars": 60,
+    "attribution": false,
+    "blockedKeywords": ["政治", "共产党", "习近平", "台独", "六四", "色情", "约炮", "裸聊", "黄图", "血腥", "自杀", "开盒"]
+  },
+  "memory": {
+    "maxPerSubject": 40,
+    "maxSelf": 80,
+    "recallPerSubject": 15,
+    "maxChars": 0,
+    "maxRules": 60,
+    "digest": {
+      "enabled": true,
+      "tickSeconds": 60,
+      "minMessages": 15,
+      "maxWaitHours": 6,
+      "quietMinutes": 10,
+      "maxDelayMinutes": 60,
+      "maxBatch": 80,
+      "contextMessages": 8,
+      "backfillHours": 12,
+      "maxRoundsPerPoll": 6,
+      "antiPollution": true,
+      "verify": false,
+      "llm": {"api": "anthropic", "model": "claude-opus-5-5", "apiKeyEnv": "AIOHUB_API_KEY", "effort": "high"}
+    },
+    "consolidate": {
+      "enabled": true,
+      "hour": 4,
+      "foldBelow": 0.5,
+      "minFold": 5,
+      "maxSummaries": 8,
+      "forgetBelow": 0.03,
+      "llm": {"api": "anthropic", "model": "claude-opus-5-5", "apiKeyEnv": "AIOHUB_API_KEY", "effort": "high"}
+    },
+    "halfLifeDays": {
+      "self": 7,
+      "default": 30
+    },
+    "summaryHalfLifeFactor": 4,
+    "hitBoost": 0.5,
+    "hitThreshold": 0.15,
+    "maxLogs": 60,
+    "maxLogChars": 80
+  },
+  "people": {
+    "enabled": true
+  },
+  "bili": {
+    "rewatchDays": 14
+  }
+}

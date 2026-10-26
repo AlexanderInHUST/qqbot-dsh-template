@@ -1,0 +1,482 @@
+{
+  "dsh": {
+    "baseUrl": "http://127.0.0.1:3080",
+    "provider": "deepseek-official",
+    "model": "deepseek-flash",
+    "reasoningEffort": "high",
+    "authToken": "",
+    "authHeader": "authorization",
+    "authPrefix": "Bearer",
+    "allowRemote": false
+  },
+  "role": {
+    "maxInjectChars": 6000
+  },
+  "snowluma": {
+    "wsUrl": "ws://snowluma:3001",
+    "httpUrl": "http://snowluma:3000",
+    "accessToken": "__FILL_SNOWLUMA_TOKEN__",
+    "followDiscoveredEndpoint": false,
+    "silenceWarnMs": 600000,
+    "launcherPath": "",
+    "homeDir": ""
+  },
+  "ownerQQ": 900000001,
+  "extraOwnerQQ": [
+    1600000002
+  ],
+  "ownerTitles": {
+    "900000001": "爸爸",
+    "1600000002": "妈妈"
+  },
+  "sessionCwd": "",
+  "agentPreset": "qq-chat",
+  "workspaceTitle": "QQ 聊天",
+  "allow": {
+    "private": [
+      900000001,
+      1600000002
+    ],
+    "groups": [
+      1100000001,
+      800000002,
+      1100000003,
+      1000000004
+    ]
+  },
+  "deny": {
+    "private": [],
+    "groups": []
+  },
+  "allowAllWhenEmpty": false,
+  "ackMessage": "",
+  "sendDelayMs": 800,
+  "questionTimeoutMs": 300000,
+  "consolePort": 3100,
+  "consoleToken": "",
+  "pricing": {
+    "models": {}
+  },
+  "security": {
+    "interceptNotify": true
+  },
+  "slang": {
+    "enabled": true,
+    "extractMinMessages": 10,
+    "extractCooldownMs": 300000,
+    "inferenceThresholds": [
+      2,
+      4,
+      8
+    ],
+    "injectMax": 8,
+    "learnerPreset": "qq-chat",
+    "workspaceTitle": "QQ 黑话学习",
+    "autoResearch": true
+  },
+  "social": {
+    "enabled": true,
+    "maxReplyChars": 500,
+    "mustReplyKeywords": [
+      "鱼妹",
+      "小鱼",
+      "🐟姐",
+      "在吗"
+    ],
+    "contextWindow": 20,
+    "triggerProbability": 0.1,
+    "activeCheckMinMs": 8000,
+    "activeCheckMaxMs": 30000,
+    "idleWindowMs": 360000,
+    "idleRetryProbability": 0.4,
+    "proactiveEnabled": false,
+    "proactiveIdleThresholdMs": 1800000,
+    "proactiveCheckMinMs": 2700000,
+    "proactiveCheckMaxMs": 5400000,
+    "proactiveProbability": 0.2,
+    "activeReplyDelayMinMs": 1000,
+    "activeReplyDelayMaxMs": 5000,
+    "activeDurationEnabled": true,
+    "activeDurationMinMs": 1200000,
+    "activeDurationMaxMs": 3000000,
+    "skipProbability": 0.05,
+    "surrenderProbability": 0,
+    "idleRetryWaitMs": 120000,
+    "burstEnabled": true,
+    "burstIntervalMinMs": 1000,
+    "burstIntervalMaxMs": 3000,
+    "longGapProbability": 0.2,
+    "longGapMinMs": 5000,
+    "longGapMaxMs": 10000
+  },
+  "socialV2": {
+    "enabled": true,
+    "autoReplyCheckMs": 30000,
+    "agentPreset": "qq-chat-v2",
+    "provideRecommendations": true,
+    "tools": {
+      "getPrompt": true,
+      "getUnread": true,
+      "getRecent": true,
+      "socialState": true,
+      "sendGroup": true,
+      "sendPrivate": true,
+      "reply": true,
+      "sendBurst": true,
+      "sendMessage": true,
+      "waitMessages": true,
+      "feedback": true,
+      "getMyRecent": true,
+      "getMessageDetail": true,
+      "getActiveMembers": true,
+      "setWakeConfig": true,
+      "markRead": true,
+      "memory": true,
+      "slangQuery": true,
+      "slangSubmit": true,
+      "getImages": true,
+      "getForwardMsg": true,
+      "sendPoke": true,
+      "listStickers": true,
+      "getStickerImage": true,
+      "sendSticker": true,
+      "setStickerRemark": true,
+      "stickerNote": true,
+      "collectSticker": true,
+      "getSelfImage": true,
+      "sendVoice": false
+    },
+    "wake": {
+      "defaultMode": "diving",
+      "preSleepWaitEnabled": true,
+      "preSleepWaitMs": 300000,
+      "recommendedDefaultInfinite": true,
+      "sleepMinMs": 60000,
+      "sleepMaxMs": 0,
+      "recommendedSleepMinMs": 300000,
+      "recommendedSleepMaxMs": 7200000,
+      "recommendedProbability": 0.03,
+      "recommendedKeywords": [
+        "鱼妹",
+        "小鱼",
+        "🐟姐",
+        "b站",
+        "小游戏",
+        "实况",
+        "攻略",
+        "海豹",
+        "企鹅",
+        "猫猫",
+        "小猫",
+        "手工",
+        "画画",
+        "蛋糕",
+        "沙雕",
+        "梗图",
+        "hk01",
+        "香港01",
+        "奇葩新闻",
+        "星星",
+        "太空",
+        "雪景",
+        "银河"
+      ],
+      "selfAliases": [
+        "小鱼",
+        "🐟姐"
+      ],
+      "addressedGroups": [
+        "group:1100000001"
+      ],
+      "recommendedAtMention": true,
+      "recommendedNameMention": true,
+      "recommendedQuestion": true,
+      "recommendedPoke": true,
+      "recommendedHint": "要潜水就直接设好下一次唤醒走开，不用先守着等；潜水时长推荐 5~120 分钟。群里的普通消息叫不叫你由 bridge 看群里情况定，概率、关键词、提问这些条件开着就行；@、引用、叫名字、拍一拍总会叫醒你，建议保持开启。需要等特定某人/某几人时，可额外设置 triggers.speakerIds。",
+      "batchWindowMs": 3000,
+      "maxWakePerMinute": 0,
+      "maxWakePerHour": 0,
+      "noActionLimit": 3,
+      "maxWakeConfigReminders": 2,
+      "otherBots": [
+        "4000000009"
+      ]
+    },
+    "send": {
+      "burstEnabled": true,
+      "burstMaxMessages": 8,
+      "burstIntervalMinMs": 500,
+      "burstIntervalMaxMs": 500,
+      "longGapProbability": 0,
+      "longGapMinMs": 5000,
+      "longGapMaxMs": 10000,
+      "maxSendPerMinute": 0,
+      "maxSendPerHour": 0,
+      "maxMessageChars": 500,
+      "maxGapMs": 500,
+      "gapBaseMs": 800,
+      "gapPerCharMs": 20,
+      "recommendedHint": "单条消息不要用空格断句，中文短句用逗号/顿号或直接连写；分条时每条都要读起来完整，不要把同一句话拆到两条里；随口接话一次一条，人多的群就一条，正经聊起来再多几条；一次最多几条、条间隔多久由工具管，不用设置；不要连续刷屏。",
+      "human": {
+        "enabled": true,
+        "baseMs": 600,
+        "perCharMs": 120,
+        "jitter": 0.3,
+        "minMs": 400,
+        "maxMs": 4000,
+        "cutOnInterrupt": true,
+        "maxBubbles": {
+          "private": 4,
+          "home": 4,
+          "group": 2
+        }
+      }
+    },
+    "wait": {
+      "defaultMs": 30000,
+      "minMs": 5000,
+      "maxMs": 600000,
+      "defaultQuietMs": 3000,
+      "minQuietAfterNewMs": 3000,
+      "busyQuietMs": 5000,
+      "addressedQuietMs": 2000,
+      "maxExtendAfterNewMs": 15000
+    },
+    "sticker": {
+      "enabled": true,
+      "syncTtlMs": 60000,
+      "maxListCount": 100,
+      "includeInPrompt": true,
+      "promptMaxStickers": 8,
+      "collect": {
+        "enabled": true,
+        "maxPerMinute": 2,
+        "maxPerHour": 10,
+        "maxRemarkChars": 20
+      }
+    },
+    "voice": {
+      "enabled": false,
+      "dir": "audio",
+      "maxSeconds": 300,
+      "maxBytes": 20971520,
+      "maxPerMinute": 2,
+      "maxPerHour": 10,
+      "allowAbsolutePath": false,
+      "defaultVolume": 1,
+      "loudness": "normal",
+      "ffmpegPath": "",
+      "autoReadback": true
+    },
+    "proactive": {
+      "enabled": true,
+      "checkIntervalMinMs": 1800000,
+      "checkIntervalMaxMs": 3600000,
+      "idleThresholdMs": 1800000,
+      "_idleThresholdMs说明": "只在关掉自由时间会话（play:main）时才用：从这么久没人说话的聊天里挑一个去玩",
+      "probability": 0.5,
+      "schedule": [
+        {
+          "from": "23:30",
+          "to": "08:00",
+          "probability": 0,
+          "_说明": "睡觉"
+        },
+        {
+          "from": "08:00",
+          "to": "08:30",
+          "probability": 0.2,
+          "_说明": "刚起床"
+        },
+        {
+          "from": "08:30",
+          "to": "12:00",
+          "probability": 0.4,
+          "_说明": "上午"
+        },
+        {
+          "from": "12:00",
+          "to": "13:30",
+          "probability": 0.1,
+          "_说明": "吃午饭、午睡"
+        },
+        {
+          "from": "13:30",
+          "to": "18:00",
+          "probability": 0.6,
+          "_说明": "下午"
+        },
+        {
+          "from": "18:00",
+          "to": "19:00",
+          "probability": 0.2,
+          "_说明": "吃晚饭"
+        },
+        {
+          "from": "19:00",
+          "to": "23:30",
+          "probability": 0.8,
+          "_说明": "晚上最爱玩"
+        }
+      ],
+      "sessionMinutes": [
+        15,
+        30
+      ],
+      "maxSessionMinutes": 60,
+      "restMinutes": [
+        60,
+        120
+      ],
+      "_sessionMinutes说明": "每次自由时间至少玩多久（分钟，随机）；没到时间想走会劝她接着玩，但不告诉她还差多久",
+      "_restMinutes说明": "玩完一次后歇多久再检查要不要去玩"
+    },
+    "feedback": {
+      "maxLength": 500,
+      "notifyOwnerOnError": false
+    },
+    "context": {
+      "recentLimit": 100,
+      "unreadLimit": 30,
+      "contextWindow": 20,
+      "inlineWakeMessages": true,
+      "wakeMessageLimit": 12,
+      "wakeRecentLimit": 4,
+      "wakeMaxChars": 6000
+    },
+    "initialPromptMaxChars": 2000,
+    "media": {
+      "maxBytes": 8388608,
+      "maxPixels": 64000000,
+      "maxCount": 5
+    },
+    "longTermMemory": {
+      "enabled": true,
+      "url": "http://extras:8940/recall",
+      "personCards": true
+    },
+    "idleCompact": {
+      "enabled": true,
+      "idleMs": 120000,
+      "minContextTokens": 100000,
+      "byKey": {
+        "group:1100000003": {
+          "minContextTokens": 150000
+        }
+      }
+    },
+    "nightSleep": {
+      "enabled": true,
+      "from": "23:30",
+      "to": "08:00",
+      "ownerAwakeMs": 1200000
+    },
+    "groupChimeIn": {
+      "enabled": true,
+      "hotWindowMs": 180000,
+      "hotMinMessages": 12,
+      "hotMinSpeakers": 3,
+      "hotProbability": 0.3,
+      "confusedDelayMs": 60000,
+      "confusedProbability": 0.7,
+      "cooldownMs": 1200000,
+      "maxPerHour": 3
+    },
+    "playShare": {
+      "enabled": true,
+      "burstMinutes": 10,
+      "minIntervalMinutes": 180,
+      "perConversationPerDay": 2,
+      "globalPerDay": 4,
+      "perSession": 1,
+      "byKey": {
+        "group:800000002": {
+          "perConversationPerDay": 0
+        },
+        "group:1100000003": {
+          "perConversationPerDay": 0
+        },
+        "group:1000000004": {
+          "perConversationPerDay": 0
+        }
+      }
+    },
+    "replyGate": {
+      "enabled": true,
+      "talkValue": {
+        "private": 1,
+        "home": 0.8,
+        "group": 0.15,
+        "byKey": {
+          "group:800000002": 0,
+          "group:1100000003": 0,
+          "group:1000000004": 0
+        }
+      },
+      "quietMs": 3000,
+      "groupWaitMaxMs": 30000,
+      "idleBackoff": {
+        "baseMs": 60000,
+        "capMs": 600000,
+        "startCount": 2,
+        "bypassPending": 8
+      },
+      "talkBack": {
+        "enabled": true,
+        "windowMinutes": 5,
+        "questionMinutes": 15,
+        "partners": 3,
+        "skipMedia": true,
+        "byKey": {
+          "group:1100000001": {
+            "windowMinutes": -1
+          }
+        },
+        "outside": {
+          "enabled": true,
+          "windowMinutes": 5,
+          "crowdOthers": 3,
+          "sideTalk": true
+        }
+      }
+    },
+    "moodEngine": {
+      "enabled": true
+    },
+    "life": {
+      "enabled": true
+    },
+    "initiate": {
+      "enabled": true,
+      "targets": [
+        "group:1100000001"
+      ]
+    },
+    "selfCheck": {
+      "enabled": true
+    },
+    "replyOnlyGroups": [
+      "group:800000002",
+      "group:1100000003",
+      "group:1000000004"
+    ]
+  },
+  "webSearch": {
+    "provider": "anthropic",
+    "apiKey": "",
+    "apiKeyEnv": "DEEPSEEK_API_KEY",
+    "baseURL": "https://api.deepseek.com/anthropic/v1",
+    "model": "deepseek-flash",
+    "maxResults": 20,
+    "timeoutMs": 120000,
+    "maxUses": 5,
+    "maxTokens": 4096,
+    "_apiKey说明": "填 DeepSeek 的 Key（和 .env 的 DEEPSEEK_API_KEY 一样）：DSH 启动 MCP 时会删掉名字带 KEY 的环境变量，apiKeyEnv 读不到"
+  },
+  "ownerTitlesGroups": [
+    "1100000001"
+  ],
+  "homeGroups": [
+    "1100000001"
+  ]
+}

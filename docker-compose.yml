@@ -1,0 +1,241 @@
+# qqbot_agent：QQ 小号（SnowLuma 官方镜像）+ qq-bridge 二代仿真 + DeepSeek Harness + 隔离沙箱
+#
+# 网络拓扑（谁能连谁）：
+#   egress（普通网络）   dsh, snowluma, egress-proxy → 能出公网；dsh/bridge 经 OneBot 连 snowluma
+#   agent-net（internal） dsh, mcp-gw             → dsh 调沙箱 MCP 只能经过 mcp-gw
+#   sandbox-net（internal）mcp-gw, sandbox, egress-proxy → 沙箱只能连到 mcp-gw（只会转回沙箱）和代理
+# 沙箱因此碰不到 dsh / qq-bridge / snowluma / 宿主机，出网只能走拒绝内网地址的 squid。
+#
+# 内存：全部加起来约 9.3G 上限（沙箱 4G 最大）。WSL2 在 %UserProfile%\.wslconfig 里给 16G；Mac 上 Docker Desktop 要在 Settings → Resources 调到 10G 以上。
+#
+# 版本全部写死在下面的 build args 里；升级流程见 README.md。
+
+# 固定项目名：卷名都是 qqbot_agent_<卷>，换了目录名（例如迁移到 WSL）也不会变成一套新卷
+name: qqbot_agent
+
+x-control-volumes: &control-volumes
+  - dsh-home:/data/dsh
+  - bridge-state:/opt/qq-bridge/state
+  - ./config/qq-bridge/config.json:/opt/qq-bridge/config.json
+  - ./roles:/opt/qq-bridge/roles
+
+services:
+  dsh:
+    build:
+      context: .
+      dockerfile: control/Dockerfile
+      args:
+        NODE_IMAGE: node:22.23.2-bookworm-slim
+        DSH_VERSION: 0.2.0-rc.2
+        PNPM_VERSION: 10.33.0
+    image: qqbot-control:local
+    command: ["/usr/local/bin/entrypoint-dsh.sh"]
+    environment:
+      TZ: Asia/Shanghai
+      # 中转站一次请求超过 32 张图会报 400；超过 28 张时 DSH 把最早的 6 张换成文字占位（control/patch-pi-ai-image-count.mjs）
+      DSH_PI_AI_MAX_REQUEST_IMAGES: "28"
+      DSH_PI_AI_IMAGE_OFFLOAD_QUANTUM: "6"
+      # 模型中转站 aiohub 的 Key（备用模型，可以不填），见 config/dsh/home.cordis.patch.yml 里的 llm-pi-ai
+      AIOHUB_API_KEY: ${AIOHUB_API_KEY:-}
+      # DeepSeek 官方 API 的 Key（现在用的模型），同上
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?在 .env 里设置 DEEPSEEK_API_KEY}
+      # Cloudflare Workers AI 的 API 令牌（备用，可以不填）
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    volumes:
+      - dsh-home:/data/dsh
+      - bridge-state:/opt/qq-bridge/state
+      - ./config/qq-bridge/config.json:/opt/qq-bridge/config.json
+      - ./roles:/opt/qq-bridge/roles
+      - ./config/dsh:/config/dsh:ro
+    networks: [egress, agent-net]
+    ports:
+      # 只映射到宿主机回环；远程服务器用 SSH 隧道，见 README「访问」
+      - "127.0.0.1:3080:13080"   # DSH Web UI
+      - "127.0.0.1:3100:13100"   # qq-bridge 控制台
+      - "127.0.0.1:6080:16080"   # 沙箱桌面 noVNC（自由时间的浏览器）
+      - "127.0.0.1:6082:16082"   # 沙箱第二块屏 noVNC（聊天用的浏览器）
+    restart: unless-stopped
+
+  bridge:
+    image: qqbot-control:local
+    pull_policy: never
+    command: ["/usr/local/bin/entrypoint-bridge.sh"]
+    environment:
+      TZ: Asia/Shanghai   # 唤醒提示里的“当前时间”、夜间降低主动概率都按这个时区
+    network_mode: "service:dsh"
+    volumes: *control-volumes
+    depends_on: [dsh, snowluma]
+    restart: unless-stopped
+
+  # QQ 协议端：SnowLuma 官方镜像（motricseven7/snowluma），原样使用、不改不重打包（EULA §5.4）。
+  # 1.14.x 与 qq-bridge v0.2.0-r4 依赖的 @snowluma/sdk ^1.14.20 同一主版本；2.x 等 qq-bridge 适配后再升。
+  # 官方要求 SYS_PTRACE + seccomp=unconfined：它要把 hook 注入容器里的 QQ 进程。
+  # 所以这个容器的隔离比别的弱，AI 碰不到它，只有 qq-bridge 通过 OneBot 和它通信。
+  snowluma:
+    image: motricseven7/snowluma:v1.14.22@sha256:f75698eeaa06a3aed6b42e88975fff6b0313a960f7e7093b2329455310fd6eee
+    environment:
+      VNC_PASSWD: ${SNOWLUMA_VNC_PASSWD:?在 .env 里设置 SNOWLUMA_VNC_PASSWD}
+      SNOWLUMA_WEBUI_HOST: 0.0.0.0
+      SNOWLUMA_WEBUI_PORT: "5099"
+      SNOWLUMA_LOG_LEVEL: info
+      SNOWLUMA_HOOK_AUTOLOAD: "1"
+      SNOWLUMA_QQ_FLAGS: "--disable-gpu --disable-software-rasterizer --disable-gpu-compositing"
+      TZ: Asia/Shanghai
+    volumes:
+      - qq-gateway-data:/app/data          # SnowLuma 配置（config/onebot.json 等）
+      - qq-client-config:/app/.config      # QQ 客户端配置
+      - qq-client-data:/app/.local/share   # QQ 登录态
+    # QQ 会把主机名、网卡 MAC（由 IP 推出）和 machine-id（在 qq-gateway-data 卷里）当成设备指纹。
+    # 容器重建时这些默认都会变，QQ 会以为换了一台机器，要求重新扫码；所以把主机名和 IP 固定下来。
+    # 换成你自己的一个固定值（比如 12 位十六进制，像 Docker 自动分配的那样），之后别再改：改了会触发一次重新扫码。
+    hostname: qqbot-snowluma
+    networks:
+      egress:
+        ipv4_address: 172.19.0.2
+    ports:
+      # 只给宿主机回环；OneBot 的 3000/3001 不映射，只有 egress 网络里的 dsh/bridge 能连
+      - "127.0.0.1:6081:6081"   # 扫码登录用的 noVNC
+      - "127.0.0.1:5099:5099"   # SnowLuma WebUI
+    shm_size: 1g
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
+    cap_add: [SYS_PTRACE]
+    security_opt: ["seccomp=unconfined"]
+    mem_limit: 2g
+    restart: unless-stopped
+
+  ui-forward:
+    image: qqbot-control:local
+    pull_policy: never
+    command: ["/usr/local/bin/entrypoint-ui-forward.sh"]
+    environment:
+      TZ: Asia/Shanghai
+    network_mode: "service:dsh"
+    depends_on: [dsh, mcp-gw]
+    mem_limit: 128m
+    restart: unless-stopped
+
+  # 跨会话长期记忆 + Telegram 搬图（MCP）。只有 dsh 能调它；它能直接上网（读 t.me）、
+  # 能经 OneBot 读聊天历史（记忆整理）。搬图由 qq-bridge 发，extras 的 /relay/prepare 负责红线、频率和下载图片。
+  extras:
+    build:
+      context: extras
+      args:
+        DEBIAN_IMAGE: debian:bookworm-20260918-slim
+    image: qqbot-extras:local
+    environment:
+      TZ: Asia/Shanghai
+      # 整理记忆用的模型，和鱼妹一样走 DeepSeek 官方 API
+      LLM_BASE_URL: https://api.deepseek.com/v1
+      LLM_MODEL: deepseek-flash
+      LLM_API_KEY: ${DEEPSEEK_API_KEY:?在 .env 里设置 DEEPSEEK_API_KEY}
+      # 4 点整理和 digest 用 aiohub 的模型（config/extras.json 的 memory.consolidate.llm / memory.digest.llm）；不填就还用上面的 DeepSeek
+      AIOHUB_API_KEY: ${AIOHUB_API_KEY:-}
+    volumes:
+      - extras-state:/data
+      - ./config/extras.json:/config/extras.json:ro
+      - ./config/qq-bridge/config.json:/config/qq-bridge.json:ro
+    # Linux / WSL 上绑定挂载的文件权限是真的：config.json 属于宿主机用户（uid/gid 1000）、权限 640，
+    # extras 以 uid 10002 运行，靠加入 gid 1000 才能读到它（Mac 的 Docker Desktop 不检查这个）
+    group_add: ["1000"]
+    networks: [egress, agent-net]
+    depends_on: [snowluma]
+    restart: unless-stopped
+
+  egress-proxy:
+    build:
+      context: egress
+      args:
+        DEBIAN_IMAGE: debian:bookworm-20260918-slim
+    image: qqbot-egress:local
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      egress: {}
+      sandbox-net:
+        ipv4_address: 172.31.250.2
+    restart: unless-stopped
+
+  mcp-gw:
+    image: qqbot-egress:local
+    pull_policy: never
+    environment:
+      TZ: Asia/Shanghai
+    # 单向中转：agent-net 上的 dsh → 沙箱的 MCP 和两块屏的 noVNC
+    command:
+      - sh
+      - -c
+      - >
+        socat TCP-LISTEN:8931,fork,reuseaddr TCP:sandbox:8931 &
+        socat TCP-LISTEN:8932,fork,reuseaddr TCP:sandbox:8932 &
+        socat TCP-LISTEN:8933,fork,reuseaddr TCP:sandbox:8933 &
+        socat TCP-LISTEN:6080,fork,reuseaddr TCP:sandbox:6080 &
+        socat TCP-LISTEN:6082,fork,reuseaddr TCP:sandbox:6082 &
+        wait
+    networks: [agent-net, sandbox-net]
+    depends_on: [sandbox]
+    restart: unless-stopped
+
+  sandbox:
+    build:
+      context: sandbox
+      args:
+        NODE_IMAGE: node:22.23.2-bookworm-slim
+        PLAYWRIGHT_MCP_VERSION: 0.0.83
+    image: qqbot-sandbox:local
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      sandbox-net:
+        ipv4_address: 172.31.250.10
+    depends_on: [egress-proxy]
+    # 固定主机名：Chromium 的资料目录锁按主机名判断，变了会以为别的机器在用
+    hostname: sandbox
+    # 根文件系统只读；除了浏览器资料卷，其余可写的都是内存盘，重启即恢复干净
+    read_only: true
+    volumes:
+      # 浏览器资料（cookie、登录态）。清空登录：docker compose down && docker volume rm qqbot_agent_sandbox-browser
+      - sandbox-browser:/var/lib/sandbox-browser
+    # 内存盘不设大小（默认最多用到内存的一半）。Chromium 带着 --disable-dev-shm-usage，共享内存其实写在 /tmp
+    tmpfs:
+      - /tmp
+      - /home/sandbox:uid=10001,gid=10001
+    shm_size: 8g
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # 不限 CPU、内存、线程数（2026-10-23 主人：这台机器都给她用）。以前 cpus 2 / mem 4g / pids 2048，
+    # Poki 这类广告页一页十几二十个渲染进程，线程顶满后所有导航 ERR_ABORTED、新标签页 Target crashed。
+    # 真把整台 WSL 的内存吃光时，让内核先杀这里的浏览器，别杀 QQ 和 bridge
+    oom_score_adj: 1000
+    restart: unless-stopped
+
+networks:
+  egress:
+    ipam:
+      config:
+        # 与首次启动时 Docker 自动分配的网段一致；snowluma 固定在 172.19.0.2。
+        # 其他容器只从 172.19.1.0/24 里自动分配，Docker 重启后谁先起来都不会抢走 .0.2
+        - subnet: 172.19.0.0/16
+          ip_range: 172.19.1.0/24
+  agent-net:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.251.0/24
+  sandbox-net:
+    internal: true
+    ipam:
+      config:
+        # 与 egress/squid.conf 里的 sandbox_src 保持一致
+        - subnet: 172.31.250.0/24
+
+volumes:
+  dsh-home: {}         # DSH 配置、会话、模型 API Key（.credentials.yaml）
+  bridge-state: {}     # qq-bridge 状态：会话映射、记忆、黑话库、表情包、控制台令牌
+  qq-gateway-data: {}  # SnowLuma 配置；以下三个升级时千万别删，否则要重新扫码
+  qq-client-config: {}
+  qq-client-data: {}
+  sandbox-browser: {}  # 沙箱浏览器的登录态（比如 B 站 cookie）
+  extras-state: {}     # 长期记忆 memory.json、搬图记录 relay.json、记忆整理水位 digest.json

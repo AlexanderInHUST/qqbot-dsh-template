@@ -1,0 +1,13 @@
+# 密钥与运行期数据
+.env
+config/qq-bridge/config.json.bak*
+backups/
+.first-login.txt
+config/qq-bridge/config.json
+# 迁移包（含全部密钥和 QQ 登录态）
+qqbot-migrate-*.tar
+# Python 缓存
+__pycache__/
+# qq-bridge 本地跑测试用的依赖和运行期状态
+qq-bridge/node_modules/
+qq-bridge/state/

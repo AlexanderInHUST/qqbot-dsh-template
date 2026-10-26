@@ -1,0 +1,7 @@
+# control/Dockerfile 的构建上下文是仓库根目录：只放镜像要用的两个目录进去，
+# .env、backups/、config.json、迁移包这些含密钥的东西不进构建上下文。
+*
+!control/
+!qq-bridge/
+qq-bridge/node_modules/
+qq-bridge/state/

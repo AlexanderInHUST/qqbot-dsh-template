@@ -1,0 +1,192 @@
+# DSH 家目录层补丁：复制到 $DSH_HOME/cordis.patch.yml（由 control/entrypoint-dsh.sh 在每次启动时覆盖）。
+# 合成顺序：bundle 补丁 → profile 的 cordis.patch.yml（qq-bridge 的 setup-dsh.mjs 管理）→ 本文件。
+# 这里放沙箱 / extras 的 MCP、模型供应商（llm-pi-ai）和系统提示等，不碰 setup-dsh.mjs 管理的区块，免得互相覆盖。
+#
+# 工具名会变成 mcp__sandbox-browser__* / mcp__sandbox-browser-chat__* / mcp__sandbox-desktop__* / mcp__qqbot-extras__*，
+# 与 qq-bridge/plugins/qq-agent-presets/qq-tool-restrict.mjs 里守卫放行的前缀一一对应，改名要两边一起改。
+# 地址指向 mcp-gw（只会把流量转进沙箱的中转容器），见 docker-compose.yml。
+# toolCallTimeoutMs 都设成计时器上限 2147483647（约 24.8 天），等于不限时：不设就是默认 60 秒。
+# 以前按工具估时间（浏览器 120 秒、extras 300 秒），长视频 bili_watch 超过 5 分钟就报 Request timed out，
+# 她重试时上一次还在后台跑，两次抢同一个标签页（2026-10-22）。
+
+- insert:
+    - id: mcp-sandbox-browser
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: sandbox-browser
+        transport: streamable-http
+        url: http://mcp-gw:8931/mcp
+        toolCallTimeoutMs: 2147483647
+
+    # qqbot_agent：聊天会话用的第二个浏览器（沙箱第二块屏 :100 上的 Chromium，noVNC 6082 能看），自由时间用上面那个
+    - id: mcp-sandbox-browser-chat
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: sandbox-browser-chat
+        transport: streamable-http
+        url: http://mcp-gw:8933/mcp
+        toolCallTimeoutMs: 2147483647
+
+    - id: mcp-sandbox-desktop
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: sandbox-desktop
+        transport: streamable-http
+        url: http://mcp-gw:8932/mcp
+        toolCallTimeoutMs: 2147483647
+
+    # 跨会话长期记忆 + Telegram 搬图，工具名 mcp__qqbot-extras__*（补丁里守卫放行了这个前缀）
+    - id: mcp-qqbot-extras
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: qqbot-extras
+        transport: streamable-http
+        url: http://extras:8940/mcp
+        toolCallTimeoutMs: 2147483647
+
+# 现在用的是 DSH 自带的 deepseek-official（Key 是环境变量 DEEPSEEK_API_KEY，bridge 的 config.json dsh 段选它）。
+# 下面的中转站 aiohub（OpenAI Chat Completions 协议）和 aiohub-gemini / gemini-4-argon 留着备用，Key 是环境变量 AIOHUB_API_KEY；
+# gemini-4-argon 2026-10-22 测过能力齐全，但回复太慢（私聊约 30 秒、群里约 1.5 分钟），没用。
+# cloudflare（Workers AI 上的同一个 DeepSeek 模型，Key 是 CLOUDFLARE_API_TOKEN）2026-10-22 也测过：能用、缓存也命中，
+# 但会话十几万 token 时每步 4~11 秒（官方 1~2 秒），也没用。aiohub 的 qwen3.8-27b 窗口只有约 128k、没有前缀缓存，没配。
+# 注意：这一条会整体覆盖 llm-pi-ai 的配置；在 Web UI 的 Models 页里加的其他 pi-ai 供应商会被它盖掉，要加就加在这里。
+# 2026-10-21 实测：该模型总是会思考；reasoning_effort 有效，high 的思考长度约为 low 的 4~10 倍；developer 角色、max_completion_tokens 都接受；支持图片输入。
+- id: llm-pi-ai
+  config:
+    providers:
+      aiohub:
+        name: AIOHub 中转
+        apiKeyEnv: AIOHUB_API_KEY
+        api: openai-completions
+        baseURL: https://api.aiohub.org/v1
+        reasoning: low
+        models:
+          - id: deepseek-v4.1-flash-1017
+            name: DeepSeek V4.1 Flash (1017)
+            # 2026-10-21 实测这个中转能看图（OpenAI image_url 格式）。不声明的话 DSH 会把图片挡掉，她就看不到群里的图和表情包
+            input: [text, image]
+            reasoningEfforts:
+              off:
+              low: low
+              high: high
+
+      # Claude Sonnet 5.5，同一个中转站的 Anthropic Messages 接口（2026-10-21 实测：x-api-key 鉴权、
+      # adaptive thinking + output_config.effort 都生效，能看图、能调工具）。中转站的模型列表里没列出它，但能用。
+      aiohub-claude:
+        name: AIOHub Claude
+        apiKeyEnv: AIOHUB_API_KEY
+        api: anthropic-messages
+        baseURL: https://api.aiohub.org
+        reasoning: medium
+        compat:
+          # pi-ai 的内置目录还不认识 claude-sonnet-5-5，手动声明它要用 adaptive thinking + effort
+          forceAdaptiveThinking: true
+          # Sonnet 5.5 拒绝非默认的 temperature；中转站是否支持 1 小时缓存和流式工具参数没验证，先关掉
+          supportsTemperature: false
+          supportsLongCacheRetention: false
+          supportsEagerToolInputStreaming: false
+        models:
+          - id: claude-sonnet-5-5
+            name: Claude Sonnet 5.5
+            input: [text, image]
+            contextWindow: 200000
+            maxTokens: 32000
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+
+      # 只给会话压缩用（qq-chat-v2 / qq-play 的 compaction-basic.summarizationProvider，2026-10-24）：
+      # 压缩请求不带 reasoningEffort，思考档位就是这里的 reasoning，所以单独一个 provider 开 high，
+      # 不动上面 aiohub-claude 的 medium。DeepSeek 的旧思考块 pi-ai 会转成普通文本发过去。
+      # 实测 21 万 token（它的分词比 DeepSeek 多算约六成）的输入能压，窗口不止 20 万，按 100 万声明（更大的没试）；
+      # 调不通时 control/patch-dsh-compaction-qq.mjs 会换回聊天的模型再压。
+      aiohub-opus:
+        name: AIOHub Claude Opus
+        apiKeyEnv: AIOHUB_API_KEY
+        api: anthropic-messages
+        baseURL: https://api.aiohub.org
+        reasoning: high
+        compat:
+          forceAdaptiveThinking: true
+          supportsTemperature: false
+          supportsLongCacheRetention: false
+          supportsEagerToolInputStreaming: false
+        models:
+          - id: claude-opus-5-5
+            name: Claude Opus 5.5
+            input: [text, image]
+            contextWindow: 1000000
+            maxTokens: 32000
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+
+      # Gemini 4 Argon，同一个中转站的 Anthropic Messages 接口（2026-10-22 实测，模型名不带 google/）。
+      # 不用 OpenAI 兼容接口（reasoning_effort 不起作用，从不思考）；Gemini 原生接口 DSH 的配置不认。
+      # 这里 adaptive thinking + effort 生效：low 基本不想，medium/high 会想；budget_tokens 会 400，所以必须 forceAdaptiveThinking。
+      # 并行工具、嵌套数组参数、看图、工具结果里的图、流式都正常。思考块的签名必须原样带回（pi-ai 会带），
+      # 同一轮里缺签名会 400；之前轮次 DeepSeek 留下的没签名的工具调用不要紧。
+      aiohub-gemini:
+        name: AIOHub Gemini
+        apiKeyEnv: AIOHUB_API_KEY
+        api: anthropic-messages
+        baseURL: https://api.aiohub.org
+        reasoning: high
+        compat:
+          forceAdaptiveThinking: true
+          supportsLongCacheRetention: false
+          supportsEagerToolInputStreaming: false
+        models:
+          - id: gemini-4-argon
+            name: Gemini 4 Argon
+            input: [text, image]
+            contextWindow: 1048576
+            maxTokens: 65536
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+
+      # Cloudflare Workers AI 上的同一个 DeepSeek V4.1 Flash（OpenAI 兼容接口，Key 是环境变量 CLOUDFLARE_API_TOKEN）。
+      # baseURL 里是 Cloudflare 账号 ID（不是密钥）。2026-10-22 实测：能看图、并行调工具、reasoning_content 往返、
+      # 前缀缓存都正常，3 万 token 的请求 3~5 秒；reasoning_effort 认 none/low/high/max（默认 high）。
+      # 价格 $0.30 / $1.20 / 缓存 $0.006 每百万 token，不分峰谷（约等于 DeepSeek 官方高峰价）。
+      # pi-ai 按 baseURL 认出 Cloudflare：不发 store / developer 角色，用 max_completion_tokens。
+      cloudflare:
+        name: Cloudflare Workers AI
+        apiKeyEnv: CLOUDFLARE_API_TOKEN
+        api: openai-completions
+        baseURL: https://api.cloudflare.com/client/v4/accounts/<CLOUDFLARE_ACCOUNT_ID>/ai/v1
+        reasoning: high
+        models:
+          - id: '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
+            name: DeepSeek V4.1 Flash (Cloudflare)
+            input: [text, image]
+            contextWindow: 1048576
+            maxTokens: 65536
+            reasoningEfforts:
+              off: none
+              low: low
+              high: high
+              max: max
+
+# 去掉 DSH 默认塞进每个会话系统提示的“编程助手”内容，它们会让 QQ 里的角色自称 DeepSeek、
+# 或者以为自己在写代码。注意：这两条会整体覆盖原条目的 config，所以把原来的字段也抄过来了
+# （来源：dsh --profile web --dump-config，DSH 0.2.0-rc.2）。升级 DSH 后要重新核对。
+# 1) 去掉开头的 "You are an AI agent powered by DeepSeek Harness."
+- id: system-prompt
+  config:
+    includeHarnessIdentity: false
+    # 原来是 "You are a coding agent powered by the {{model}} model." / "Your working directory is {{cwd}}."，
+    # 会让模型把 QQ 聊天和自由时间都当成编程任务来“高效完成”
+    personaSuffix: ""
+    personaPrefix: 你在 QQ 上扮演一个角色，你是谁、怎么说话以人格卡为准。
+# 2) 去掉 "DeepSeek Harness 源码在哪""你在通过 Web GUI 和用户交互……" 这两段开发说明
+- id: web-runtime
+  config:
+    openBrowser: !!js ctx.webStartup.openBrowser
+    printUrl: true
+    surfaceContext: false
+    trustedHosts: !!js ctx.webStartup.trustedHosts

@@ -1,0 +1,5 @@
+# 统一用 LF：在 Windows 上检出时 shell 脚本、Dockerfile 一旦变成 CRLF，容器就起不来
+* text=auto eol=lf
+*.patch -text
+*.png binary
+*.jpg binary
