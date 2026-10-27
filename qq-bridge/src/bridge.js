@@ -26,7 +26,7 @@ import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { DynamicReplyGate, talkValueFor } from './reply-gate.js';
 import { browserOfTool, notePageFromResult, pickScreenshotTab } from './browser-tabs.js';
-import { compactModelMessage, defang, isStickerMedia, stickerSummaryText } from './qq-model-view.js';
+import { compactModelMessage, dateTimeText, defang, isStickerMedia, stickerSummaryText } from './qq-model-view.js';
 import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
@@ -3053,14 +3053,16 @@ async function main() {
     let wakeState;
     let wakeToken;
     let wakeSnapshot;
-    // 快照里的旧未读：没放进来的（olderSkipped）别回头接；放进 recent 的（staleRecent）是当时没接上的，多半过去了
+    // 快照里的旧未读：没放进来的（olderSkipped）别回头接；放进 recent 的（staleRecent）是当时没接上的，多半过去了；群里中间放不下的（middleSkipped）只报条数
     const staleSnapshotHintV2 = (snap) => {
       const old = snap.olderSkipped;
       const rec = snap.staleRecent;
+      const mid = snap.middleSkipped;
+      const middle = mid ? `middleSkipped 是 ${mid.from === mid.to ? mid.from : `${mid.from}~${mid.to}`} 中间那 ${mid.count} 条，太多放不下，messages 里留的是最新的和叫你的；想知道前面在聊什么就 qq_get_recent_messages 看看。\n` : '';
       const skipped = old ? `olderSkipped 是 ${old.from}~${old.to} 攒下的 ${old.count} 条旧未读，已经过去了，没放进来，别回头接；` : '';
-      if (!rec) return old ? `${skipped}recent 只当背景。\n` : '';
+      if (!rec) return old ? `${middle}${skipped}recent 只当背景。\n` : middle;
       const range = rec.from === rec.to ? rec.from : `${rec.from}~${rec.to}`;
-      return `${skipped}recent 里 ${range} 那 ${rec.count} 句${old ? '也' : ''}是当时没接上的旧消息（看 ago），话题多半已经过去了：不是还没办完的正事，就别补回、别再追问，只当背景。\n`;
+      return `${middle}${skipped}recent 里 ${range} 那 ${rec.count} 句${old ? '也' : ''}是当时没接上的旧消息（看 ago），话题多半已经过去了：不是还没办完的正事，就别补回、别再追问，只当背景。\n`;
     };
     if (opts.wakeReason) {
       if (wakeBlocked()) return skipWake();
@@ -3640,6 +3642,24 @@ async function main() {
     }
   }
 
+  // 引用的是她自己发的：QQ 那边只给“[图片]”，她分不清是哪张。2026-10-27 20:02 小群妈妈引用了 15:44 那张 XP 截图夸她，
+  // 她当成 18:38 私聊里发给爸爸的月亮画讲了一通，爸爸说图没发出来，她还说“妈妈那边都看到了呀”。
+  // 现在用她自己记的那条（[截图:…] / [沙雕图:…] / [表情包:…]），过了 10 分钟的再写上是什么时候发的。
+  function ownQuoteInfoV2(key, messageId, info, selfId) {
+    if (!info || selfId == null || String(info.userId ?? '') !== String(selfId)) return info;
+    const canonical = canonicalV2Key(key);
+    const st = canonical ? socialV2.conversations.get(canonical) : null;
+    const mine = (Array.isArray(st?.recentMessages) ? st.recentMessages : [])
+      .find((m) => m?.isSelf && m.messageId != null && String(m.messageId) === String(messageId));
+    if (!mine) return info;
+    const own = String(mine.text || '');
+    const vague = !info.text || /\[(图片|表情包)\]/.test(info.text);
+    const text = vague && /^\[(截图|沙雕图|表情包)/.test(own) ? own.slice(0, 200) : info.text;
+    const at = Number(mine.time) || 0;
+    const sender = at && Date.now() - at > 10 * 60000 ? `${info.sender} ${dateTimeText(at)} 发的` : info.sender;
+    return { ...info, sender, text };
+  }
+
   // 发送引用时解析目标：支持真实 QQ message_id，也支持 recentMessages 里的 seq（自动映射到真实 messageId）。
   async function resolveReplyTargetV2(st, kind, convId, ref) {
     const refStr = String(ref ?? '').trim();
@@ -3718,7 +3738,7 @@ async function main() {
       if (kind !== 'group') return null;
       return resolveGroupMemberName(event.group_id, qq);
     };
-    const resolveReply = (messageId) => resolveReplyInfo(kind, id, messageId, event.self_id);
+    const resolveReply = async (messageId) => ownQuoteInfoV2(key, messageId, await resolveReplyInfo(kind, id, messageId, event.self_id), event.self_id);
     // textContent 带引用对象信息，供 DSH 判断“这句话在对谁说”；
     // plainContent 只保留当前消息自己的文字，用于命令/指向性判断，避免被引用原文干扰。
     const textContent = await segmentsToText(event.message ?? [], { resolveAtName, resolveReply });

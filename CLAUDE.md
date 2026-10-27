@@ -67,11 +67,11 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 她最后那段话像在问人（问号、吗、几点、什么……），她直接在跟着说的人（引用或 @ 的、把她叫来的、她开口前最后说话的）`questionMinutes` 15 分钟内回话也算。
   - `talkBack.byKey` 单独设时间窗，`windowMinutes` 负数是不限：小群 `group:1100000001` 是 -1，她下次说话前，她聊着的人什么时候说话都叫她。
   - 不算的：只发图或表情的（只发表情的、是她直接在跟着说的人就算；照片截图都不算）、引用或 @ 别人的、约游戏喊人上号的（`gameWords`）。被接话叫来她没开口，她看过的那几个人这段就不再叫（`talkBackDeclined`），她直接在跟着说的人另外说话还叫。
-  - 家里以外的群 `talkBack.outside`：她说完后已经有 3 个别人说过话（`crowdOthers`）不叫；这人在跟别人你来我往（`sideTalk`）不叫。算她在聊着的人还加上她引用或 @ 的人（`toUserIds`）和把她叫来的人（`wakeBy`）。`outside.direct:true` 是更严的第一版。
+  - 家里以外的群 `talkBack.outside`：她说完后已经有 3 个别人说过话（`crowdOthers`）不叫；这人在跟别人你来我往（`sideTalk`）不叫。算她在聊着的人还加上她引用或 @ 的人（`toUserIds`）和把她叫来的人（10 分钟里叫过她的都算，`wakeBys` 最多 6 个，只在内存里）。她这一轮（`lastWakeAt` 以后）说的话中间被别人插了话也算一段。`outside.direct:true` 是更严的第一版。
 - 等对方说完再开口（`replyTiming`，src/app/reply-timing.js，纯函数在 v2-wait.js 的 `adaptiveQuietMs`）：最后一条别人的话之后安静多久才算说完，按这个人自己的连发节奏（同一人相邻两条间隔的中位数 × `rhythmFactor` 1，夹在 3~8 秒；样本不够 3 个用 `baseMs` 3 秒）再按这条的样子加减：
   - 话说一半（然后、但是、我跟你说、逗号结尾）或只 @ 了一下 +5 秒；只发了照片截图 +4 秒（表情包不算）；几个字的碎片 +3 秒；
   - 问她的话说完了（问号、吗、几点…）2 秒；带句号叹号的不超过 3 秒；家里以外的群正热闹（60 秒 ≥6 条 ≥3 人）+1 秒；总共夹在 1.5~12 秒。
-  - 用在合并唤醒（到点还没说完就再等，从第一条算最多 `maxDelayMs` 15 秒；定时类唤醒不管）、一轮里的等待（她填的 quietMs 只会更久）、回复门控的 quietMs。日志 `grep 计划唤醒` 带“等对方说完：Xs，原因”。
+  - 用在合并唤醒（到点还没说完就再等，从第一条算最多 `maxDelayMs` 15 秒；群里只等叫她的那个人说完，旁人接着聊不算；定时类唤醒不管）、一轮里的等待（她填的 quietMs 只会更久）、回复门控的 quietMs。日志 `grep 计划唤醒` 带“等对方说完：Xs，原因”。
   - `enabled:false`（代码默认）回到下面的死时间。
 - 唤醒合并 `wake.batchWindowMs` 3000（replyTiming 关着时用），以全局配置为准。`maxWakePerHour` / `maxWakePerMinute` 0（不限）。
 - 会话正忙时进来的唤醒，回合结束后只在触发它的那条还没给她看过时补发。日志 `grep 跳过补发`。
@@ -80,6 +80,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 群里最多等 `replyGate.groupWaitMaxMs` 30 秒，只有有人叫她、或者门控觉得该回才提前返回。
   - 等待的基线从 readThroughSeq 算，看过的不会再叫醒她。
 - 群里攒了很久的未读（`context.staleUnreadMinutes` 30）：开头连着的旧未读不给原文，快照里写 `olderSkipped`，遇到叫她的就停；放进 recent 的旧未读（`staleRecent`，不进 JSON）提示里写明是当时没接上的、话题多半过去了，不是没办完的正事就别补回、别追问。私聊不跳。过了 10 分钟的消息带 `ago`。日志 `grep 快照跳过过时未读`。
+- 群里剩下的还是放不下（`wakeMessageLimit` 12 条、`wakeMaxChars` 6000 字）：留最新的和叫她的，中间的只给条数 `middleSkipped`（记成看过，提示让她想看就 qq_get_recent_messages），游标照样走到最后。私聊还是从早的给、`partial` 让她接着读。`context.keepNewestInGroups:false` 回到从早的给。日志 `grep 快照放不下`。
 - 跨会话【别处的事】（`crossSession`）：给其他会话最近 3 小时的内容。家里以外的群看私聊、家里的群、别的群都只给条数。
 - 闲时压缩 `idleCompact`：一轮结束后安静 2 分钟、上下文 ≥10 万 token，就执行 DSH `/compact`。
   - `byKey` 可单独设（技术群 15 万）；同一会话至少隔 `minIntervalMinutes` 60。
@@ -91,6 +92,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 - 像人打字那样发（`send.human`）：条间隔 600 毫秒 + 每字 120 毫秒，±30%，夹在 0.4~4 秒。
   - 一次最多几条 `maxBubbles`：私聊 4、家里的群 4、别的群 2，多的并进最后一条。
   - `cutOnInterrupt`：私聊对方说了话、群里有人叫她，后面的不发，返回 `notSent`。日志 `grep 分条发送被插话打断`。
+  - 一条发失败（QQ 网络异常等），后面的不再发；错误文字写清哪几条已经发出去（别再发）、哪几条没发出去（要补只补这些）。日志 `grep 'QQ 发送失败\|部分成功'`。
 - 发前看一眼（`replyTiming.holdBeforeSend`）：她调 qq_send_message / qq_reply 时，她最后一次看消息以后跟她有关的人又说了话（私聊：对方；群：叫她的、她引用或 @ 的人、把她叫来的人、她开口前最后说话的人；别的机器人不算），先不发：等对方说完（最多 `holdQuietMaxMs` 8 秒），返回 `held:true` + `newMessages` + 没发的 `notSent`，她看完照发、改了再发或不说了。每批新消息拦一次，一轮最多 `maxHoldsPerTurn` 2 次；play 发进聊天的不拦。日志 `grep 发前看一眼`。
 - 发送条数不限（`send.maxSendPerHour` / `maxSendPerMinute` 0）。
 - 她把话直接写成文字、一轮里什么也没发（文字不会转发到 QQ）：收尾的 qq_mark_read / qq_set_wake_config 结果带 `hint`，没收尾的【提醒】里也写明那段没发出去；她写给自己的旁白（“不是在叫我”“没插话”、括号里的动作）不算。日志 `grep 话写成了文字没发出去`。
@@ -100,7 +102,8 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 收藏和 qq_sticker_note 记“表达什么、什么时候发”（usage）。findSticker 认 id、md5、整句备注。
 - GIF 用 ffmpeg 抽帧拼成网格图（src/gif-frames.js），因为 DeepSeek 只看第一帧。
 - 她换头像时 extras `/describe-avatar` 描述一次，写进身份行。日志 `grep avatar`。
-- 截图 `qq_send_screenshot(key, token, tabIndex?)`：不填就截她最后用的那页（src/browser-tabs.js）。play 截 8931，聊天截 8933。画图就是在 about:blank 用 canvas 画满再截，截出去的 about:blank / data: 页记一笔玩过的“画了一张画”。
+- 截图 `qq_send_screenshot(key, token, tabIndex?)`：不填就截她最后用的那页（src/browser-tabs.js）。play 截 8931，聊天截 8933。画图就是在 about:blank 用 canvas 画满再截，截出去的 about:blank / data: 页记一笔玩过的“画了一张画”，聊天记录里写 `[截图:自己画的画]`。
+- 别人引用她发的图：QQ 只给“[图片]”，换成她自己记的那条（`[截图:…]` / `[沙雕图:…]` / `[表情包:…]`，要还在 recentMessages 里）；引用她过了 10 分钟的话写成“[引用 鱼妹 YYYY-MM-DD HH:MM 发的：…]”（bridge.js 的 `ownQuoteInfoV2`）。
 - 沙雕图 `qq_send_meme(key, token, post, caption)`（`tools.sendMeme`）：
   - bridge 先请 extras `/relay/prepare` 查红线、频率并下载，再自己发；发失败调 `/relay/cancel`。
   - 限额在 extras 的 `relay`：每会话每天 3 波、间隔 120 分钟、一波 3 条、全局每天 20 条，0~8 点不发。
@@ -108,9 +111,16 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 
 ### 她的一天
 
-- 睡觉 `nightSleep {from:"23:30", to:"08:00", ownerAwakeMs:1200000}`：
-  - 夜里只有主人私聊、或在群里叫她才醒，醒后 20 分钟内主人说话都算（每句顺延）。被挡的消息早上每个会话补一次（【你刚睡醒】）。日志 `grep 夜间睡觉`。
-  - 她说去睡就调 `qq_go_to_sleep`，只在夜里或睡前 `earlySleepMinutes` 120 分钟内能用。别的窗口一起收尾（steer【你要去睡了】）。
+- 睡觉 `nightSleep {from:"23:30", to:"08:00", ownerAwakeMs:1200000, vary:{enabled:true}}`：
+  - 每晚浮动 `vary`（src/proactive-schedule.js 的 `nightPlan`，代码默认关，关着就是固定的 from / to）：
+    - 睡觉在 from 上下 `bedMinutes` [-40,40]、起床在 to 上下 `wakeMinutes` [-20,30] 分钟。
+    - 周五周六晚上（`weekendNights`）再晚睡 30、晚起 40 分钟。
+    - 熬夜：她说去睡的时间、夜里陪主人聊到的时间（`socialV2.upLateAt`）比这晚的睡觉时间晚超过 20 分钟，第二天多睡 (晚的分钟 − 20) × 0.5，最多 60。
+    - 赖床：`lazyProbability` 0.4 的早上醒了先赖 `lazyMinutes` [5,30] 分钟，能回消息，自由时间和主动找人都跳过，【你现在】写“还赖在床上看手机”。
+    - 随机数按日期算，重启不变；挪完不够 4 小时就不挪。【你现在】写今晚几点左右睡、为什么（想早点睡、明天周末）。
+    - `proactive.schedule` 的“睡觉”段还是固定的 23:30~08:00，晚睡、早起的那一会儿不去玩，只能聊天。
+  - 夜里只有主人私聊、或在群里叫她才醒，醒后 20 分钟内主人说话都算（每句顺延）。被挡的消息起床时每个会话补一次（【你刚睡醒】）。日志 `grep 夜间睡觉`。
+  - 她说去睡就调 `qq_go_to_sleep`，只在夜里或这晚睡觉时间前 `earlySleepMinutes` 120 分钟内能用。别的窗口一起收尾（steer【你要去睡了】）。
   - 晚安只在家里的小群、私聊或正聊着的地方说。家里以外的群不让记“到点去说晚安”的提醒（qq_remind_me 拒，等人说话的不拦），那里的 reminder 唤醒也写明只想说一声就别说。
   - 改睡觉时间时要同步 `proactive.schedule` 里的“睡觉”段。
 - 给她看的时间都带日期（qq-model-view 的 `dateTimeText` “YYYY-MM-DD HH:MM”，模块里是 `whenV2`）：消息、提醒、看过的、【你现在】的时间行（带星期）。人物卡的约定、最近写 ISO 日期；压缩笔记、digest、改卡都不写“今天”“昨天”。qq-chat-v2 的【你现在】让她拿消息时间跟现在比（上午说没吃午饭，晚上就问后来吃了没）。

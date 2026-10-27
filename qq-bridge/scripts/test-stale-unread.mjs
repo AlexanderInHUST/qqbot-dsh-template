@@ -136,3 +136,50 @@ test('qq_get_unread_messages 结果里旧消息带 ago', () => fixture(async ({ 
   assert.equal(r.data.messages[0].ago, '45 分钟前');
   assert.equal(r.data.messages[1].ago, undefined);
 }));
+
+// 2026-10-27 11:32 大群：30 条未读，跳过旧的 14 条后剩 16 条，快照从早的给 12 条，叫她来的“@鱼妹 在不在”在后面 4 条里没放进来
+test('群里放不下：留最新的和叫她的，中间的只报条数（middleSkipped），游标照样走到最后', () => fixture(async ({ h, st, append, get }) => {
+  for (let i = 0; i < 14; i++) append(`老话${i}`, 50 - i);    // seq 1..14，过了 30 分钟
+  for (let i = 0; i < 15; i++) append(`新话${i}`, 25 - i);    // seq 15..29
+  append('[CQ:at] 在不在', 0, { atSelf: true });               // seq 30
+  const snap = h.buildWakeSnapshotV2('group:456');
+  assert.equal(snap.messages.at(-1).seq, 30, '叫她的那条一定在');
+  assert.deepEqual(seqs(snap.messages), [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+  assert.equal(snap.middleSkipped.count, 4);
+  assert.equal(snap.readThroughSeq, 30);
+  assert.equal(snap.partial, false);
+  const before = h.calls.prompts.length;
+  await h.sendWakePromptV2('group:456', 'atMention');
+  const p = promptText(h, before);
+  assert.match(p, /middleSkipped 是 [0-9: ~-]+ 中间那 4 条.*qq_get_recent_messages/);
+  assert.doesNotMatch(p, /接着读/);
+  const marked = await get('/api/socialV2/mark-read', { throughSeq: 30 });
+  assert.equal(marked.status, 200, JSON.stringify(marked.data));
+  assert.equal(st.unread.length, 0);
+}));
+
+test('群里放不下：中间叫她的那条也留着', () => fixture(async ({ h, append }) => {
+  for (let i = 0; i < 20; i++) append(i === 3 ? '鱼妹 你看这个' : `话${i}`, 20 - i); // seq 1..20，seq 4 叫她
+  const snap = h.buildWakeSnapshotV2('group:456');
+  assert.equal(snap.messages.length, 12);
+  assert.equal(snap.messages[0].seq, 4);
+  assert.deepEqual(seqs(snap.messages).slice(1), [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  assert.equal(snap.middleSkipped.count, 8);
+  assert.equal(snap.readThroughSeq, 20);
+}));
+
+test('群里放得下就跟原来一样，没有 middleSkipped', () => fixture(async ({ h, append }) => {
+  for (let i = 0; i < 5; i++) append(`话${i}`, 5 - i);
+  const snap = h.buildWakeSnapshotV2('group:456');
+  assert.deepEqual(seqs(snap.messages), [1, 2, 3, 4, 5]);
+  assert.equal(snap.middleSkipped, undefined);
+}));
+
+test('私聊放不下：还是从早的给，partial 让她接着读', () => fixture(async ({ h, append }) => {
+  for (let i = 0; i < 16; i++) append(`话${i}`, 16 - i);
+  const snap = h.buildWakeSnapshotV2('private:123');
+  assert.deepEqual(seqs(snap.messages), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  assert.equal(snap.middleSkipped, undefined);
+  assert.equal(snap.partial, true);
+  assert.equal(snap.readThroughSeq, 12);
+}, { key: 'private:123' }));

@@ -10,7 +10,7 @@ export function createWake(app) {
     wakeConfigMissCount, wakeConfigUpdatedKeys
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
-  let FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2,
+  let FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2, lazyInBedV2,
     messageMediaStore, nightSleepBlocksV2, playHoldV2, quietLeftV2, quietNeededV2, readThroughSeqV2,
     replyTimingCfgV2, saveSocialV2State, socialV2, startFreeTimeV2, whenV2;
 
@@ -291,13 +291,20 @@ export function createWake(app) {
     // 不再死等 batchWindowMs，而是等到“最新一条之后安静够了”；到点还有人在说就再等，从第一条算最多 maxDelayMs
     const rt = !isTimerWakeReason(reason) ? replyTimingCfgV2() : null;
     const adaptive = !!rt?.enabled;
-    if (adaptive) batchMs = Math.max(300, quietLeftV2(key, st) ?? batchMs);
     const since = Date.now();
+    // 群里是谁叫的她就只等这个人说完，旁人接着聊不再往后推：2026-10-27 19:57 大群里阿明 @ 她，
+    // 补了一句“*故事”，又有个不相干的人说了一句，她 14 秒后才被叫醒
+    // （wakeBy 是触发这次唤醒的那条消息刚记下的；等的时候又有人叫她就换成那个人）
+    const waker = () => {
+      const wb = st.wakeBy;
+      return String(key).startsWith('group:') && wb?.userId && Number(wb.at || 0) >= since - 2000 ? wb.userId : null;
+    };
+    if (adaptive) batchMs = Math.max(300, quietLeftV2(key, st, Date.now(), waker()) ?? batchMs);
     const fire = () => {
       st.pendingWakeTimer = null;
       const finalReason = st.pendingWakeReason || reason;
       if (adaptive && !isTimerWakeReason(finalReason)) {
-        const left = quietLeftV2(key, st) ?? 0;
+        const left = quietLeftV2(key, st, Date.now(), waker()) ?? 0;
         const budget = rt.maxDelayMs - (Date.now() - since);
         if (left > 50 && budget > 50) {
           st.pendingWakeTimer = setTimeout(fire, Math.max(100, Math.min(left, budget)));
@@ -311,7 +318,7 @@ export function createWake(app) {
     st.pendingWakeTimer = setTimeout(fire, batchMs);
     // 与其它 per-conversation 定时器保持一致：别让一个待唤醒定时器把进程钉住不退出。
     st.pendingWakeTimer.unref?.();
-    const q = adaptive ? quietNeededV2(key, st) : null;
+    const q = adaptive ? quietNeededV2(key, st, Date.now(), waker()) : null;
     log(`[reserved2] 计划唤醒 ${key}（${reason}），${Math.round(batchMs / 100) / 10}s 后发送${q ? `（等对方说完：${Math.round(q.ms / 100) / 10}s，${q.why}）` : ''}`);
   }
 
@@ -441,6 +448,7 @@ export function createWake(app) {
     const st = getSocialV2State(PLAY_KEY);
     const next = Math.round((socialV2.proactiveNextAt - Date.now()) / 60000);
     if (isNightSleepV2()) { log(`[reserved2] 自由时间检查：睡觉时间，跳过；下次约 ${next}min 后`); return; }
+    if (lazyInBedV2()) { log(`[reserved2] 自由时间检查：醒了还在赖床，跳过；下次约 ${next}min 后`); return; }
     if (isConversationBusyV2(PLAY_KEY, st)) { log(`[reserved2] 自由时间检查：还在玩，跳过；下次约 ${next}min 后`); return; }
     const hold = playHoldV2();
     if (hold) { log(`[reserved2] 自由时间检查：答应了先不玩（到 ${whenV2(hold.until)}），跳过；下次约 ${next}min 后`); return; }
@@ -520,7 +528,7 @@ export function createWake(app) {
     },
     link() {
       ({
-        FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2,
+        FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2, lazyInBedV2,
         messageMediaStore, nightSleepBlocksV2, playHoldV2, quietLeftV2, quietNeededV2, readThroughSeqV2,
         replyTimingCfgV2, saveSocialV2State, socialV2, startFreeTimeV2, whenV2
       } = app);

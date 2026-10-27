@@ -30,6 +30,7 @@ export function createV2State(app) {
     life: emptyLifeV2(),
     sleptAt: 0, // 她用 qq_go_to_sleep 说了要去睡的时间（提前睡，或夜里被叫醒后接着睡），睡到下一个起床时间
     sleptKey: '', // 在哪个会话说的
+    upLateAt: 0, // 夜里陪主人聊到的最后时间（nightSleep.vary：熬夜了第二天起得晚）
     playLog: [], // 自由时间玩过的东西（跨轮次，存盘）[{ at, what }]，最近几小时
     playStartedAt: 0, // 最近一次自由时间开始 / 结束的时间
     playEndedAt: 0,
@@ -281,6 +282,7 @@ export function createV2State(app) {
       socialV2.reminders = Array.isArray(raw?.reminders) ? raw.reminders.filter((r) => r && typeof r.key === 'string' && typeof r.note === 'string' && Number.isFinite(Number(r.due))).slice(-REMINDERS_MAX) : [];
       socialV2.sleptAt = Number(raw?.sleptAt) > 0 && Number(raw.sleptAt) <= Date.now() ? Number(raw.sleptAt) : 0;
       socialV2.sleptKey = String(raw?.sleptKey || '');
+      socialV2.upLateAt = Number(raw?.upLateAt) > 0 && Number(raw.upLateAt) <= Date.now() ? Number(raw.upLateAt) : 0;
       socialV2.playLog = Array.isArray(raw?.playLog) ? raw.playLog.filter((x) => x && typeof x.what === 'string' && Number.isFinite(Number(x.at))).slice(-PLAY_LOG_MAX) : [];
       socialV2.playStartedAt = Number(raw?.playStartedAt) || 0;
       socialV2.playEndedAt = Number(raw?.playEndedAt) || 0;
@@ -415,7 +417,7 @@ export function createV2State(app) {
   function flushSocialV2State() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     try {
-      const obj = { paused: socialV2.paused, freeTimeHistory: socialV2.freeTimeHistory.slice(-20), watchedVideos: socialV2.watchedVideos, readPages: (socialV2.readPages || []).slice(-READ_PAGES_MAX), selfAvatar: socialV2.selfAvatar, proactiveNextAt: socialV2.proactiveNextAt, playShares: (socialV2.playShares || []).slice(-100), mood: socialV2.mood, sleptAt: socialV2.sleptAt || 0, sleptKey: socialV2.sleptKey || '', playLog: (socialV2.playLog || []).slice(-PLAY_LOG_MAX), playStartedAt: socialV2.playStartedAt || 0, playEndedAt: socialV2.playEndedAt || 0, lastPlaySay: socialV2.lastPlaySay, replyGates: socialV2.replyGates, life: socialV2.life, reminders: (socialV2.reminders || []).slice(-REMINDERS_MAX), playSessions: (socialV2.playSessions || []).slice(-PLAY_SESSIONS_MAX), selfClaims: (socialV2.selfClaims || []).slice(-SELF_CLAIMS_MAX), tellNotes: (socialV2.tellNotes || []).slice(-30), playHold: socialV2.playHold || null, conversations: Object.create(null) };
+      const obj = { paused: socialV2.paused, freeTimeHistory: socialV2.freeTimeHistory.slice(-20), watchedVideos: socialV2.watchedVideos, readPages: (socialV2.readPages || []).slice(-READ_PAGES_MAX), selfAvatar: socialV2.selfAvatar, proactiveNextAt: socialV2.proactiveNextAt, playShares: (socialV2.playShares || []).slice(-100), mood: socialV2.mood, sleptAt: socialV2.sleptAt || 0, sleptKey: socialV2.sleptKey || '', upLateAt: socialV2.upLateAt || 0, playLog: (socialV2.playLog || []).slice(-PLAY_LOG_MAX), playStartedAt: socialV2.playStartedAt || 0, playEndedAt: socialV2.playEndedAt || 0, lastPlaySay: socialV2.lastPlaySay, replyGates: socialV2.replyGates, life: socialV2.life, reminders: (socialV2.reminders || []).slice(-REMINDERS_MAX), playSessions: (socialV2.playSessions || []).slice(-PLAY_SESSIONS_MAX), selfClaims: (socialV2.selfClaims || []).slice(-SELF_CLAIMS_MAX), tellNotes: (socialV2.tellNotes || []).slice(-30), playHold: socialV2.playHold || null, conversations: Object.create(null) };
       for (const [key, st] of socialV2.conversations) {
         obj.conversations[key] = {
           wakeConfig: st.wakeConfig,

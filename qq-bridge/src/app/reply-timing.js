@@ -41,13 +41,24 @@ export function createReplyTiming(app) {
     const last = recent.filter((m) => m && !m.isSelf && now - Number(m.time || 0) < 60000);
     return last.length >= 6 && new Set(last.map((m) => String(m.userId ?? m.sender ?? ''))).size >= 3;
   }
-  /** 最新一条别人的话之后，她该等多久（{ms, why}）。没开 replyTiming 时返回 null。 */
-  function quietNeededV2(key, st, now = Date.now()) {
+  // 最新一条别人的话；给了 userId 就只看这个人的
+  function lastIncomingOfV2(st, userId = null) {
+    const recent = Array.isArray(st?.recentMessages) ? st.recentMessages : [];
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const m = recent[i];
+      if (m && !m.isSelf && (userId == null || String(m.userId) === String(userId))) return m;
+    }
+    return null;
+  }
+  /**
+   * 最新一条别人的话之后，她该等多久（{ms, why}）。没开 replyTiming 时返回 null。
+   * userId：只等这个人说完（群里被某人叫来时用，旁人接着聊不算）。
+   */
+  function quietNeededV2(key, st, now = Date.now(), userId = null) {
     const c = replyTimingCfgV2();
     if (!c.enabled) return null;
     const recent = Array.isArray(st?.recentMessages) ? st.recentMessages : [];
-    let last = null;
-    for (let i = recent.length - 1; i >= 0; i--) if (recent[i] && !recent[i].isSelf) { last = recent[i]; break; }
+    const last = lastIncomingOfV2(st, userId) ?? (userId != null ? lastIncomingOfV2(st) : null);
     if (!last) return { ms: c.baseMs, why: '默认' };
     return adaptiveQuietMs({
       msg: last,
@@ -56,11 +67,13 @@ export function createReplyTiming(app) {
       hot: hotV2(key, st, now),
     }, c);
   }
-  /** 离“对方说完了”还差多久（毫秒，≤0 就是已经安静够了）；没开时返回 null。 */
-  function quietLeftV2(key, st, now = Date.now()) {
-    const q = quietNeededV2(key, st, now);
+  /** 离“对方说完了”还差多久（毫秒，≤0 就是已经安静够了）；没开时返回 null。userId 同上。 */
+  function quietLeftV2(key, st, now = Date.now(), userId = null) {
+    const q = quietNeededV2(key, st, now, userId);
     if (!q) return null;
-    return q.ms - (now - (Number(st?.lastIncomingAt) || 0));
+    const mine = userId != null ? lastIncomingOfV2(st, userId) : null;
+    const at = mine ? Number(mine.time) || 0 : Number(st?.lastIncomingAt) || 0;
+    return q.ms - (now - at);
   }
 
   // 她还没看过的别人的话（unread 和 recent 合起来，按 seq 去重）
@@ -82,8 +95,9 @@ export function createReplyTiming(app) {
       const target = recent.find((m) => m && String(m.messageId ?? '') === String(replyToMessageId).trim());
       if (target?.userId && !target.isSelf) ids.add(String(target.userId));
     }
-    const wb = st.wakeBy;
-    if (wb?.userId && now - Number(wb.at || 0) <= 10 * 60000) ids.add(String(wb.userId));
+    for (const wb of [...(st.wakeBys || []), st.wakeBy]) {
+      if (wb?.userId && now - Number(wb.at || 0) <= 10 * 60000) ids.add(String(wb.userId));
+    }
     // 她开口前看到的最后一个说话的人（3 分钟内）
     for (let i = recent.length - 1; i >= 0; i--) {
       const m = recent[i];

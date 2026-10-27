@@ -422,12 +422,13 @@ export function createV2Messages(app) {
       messages: [], recent: [], unreadCount: st.unread.length, includedUnreadCount: 0,
       readThroughSeq: readThroughSeqV2(st, staleHidden), partial: st.unread.length > staleHidden.length
     };
-    const shownCount = () => staleHidden.length + packet.messages.length + packet.recent.filter((m) => staleSeqs.has(m.seq)).length;
+    let middleHidden = []; // 群里放不下、中间只给条数的（见下面）
+    const shownCount = () => staleHidden.length + middleHidden.length + packet.messages.length + packet.recent.filter((m) => staleSeqs.has(m.seq)).length;
     const tryAdd = (field, msg) => {
       const previousThrough = packet.readThroughSeq;
       packet[field].push(compactModelMessage(withAgoV2(msg, now)));
       packet.includedUnreadCount = packet.messages.length;
-      packet.readThroughSeq = readThroughSeqV2(st, [...staleHidden, ...packet.messages, ...packet.recent]);
+      packet.readThroughSeq = readThroughSeqV2(st, [...staleHidden, ...middleHidden, ...packet.messages, ...packet.recent]);
       packet.partial = shownCount() < st.unread.length;
       if (JSON.stringify(packet).length <= maxChars) return true;
       packet[field].pop();
@@ -436,9 +437,31 @@ export function createV2Messages(app) {
       packet.partial = shownCount() < st.unread.length;
       return false;
     };
-    if (v2ToolEnabled('getUnread')) {
+    const fresh = st.unread.filter((m) => !staleSeqs.has(m.seq));
+    if (v2ToolEnabled('getUnread') && String(key).startsWith('group:') && context.keepNewestInGroups !== false && fresh.length > 1) {
+      // qqbot_agent：群里放不下时留最新的和叫她的，中间放不下的只报条数（middleSkipped，记成看过）。
+      // 以前从最早的给 12 条，2026-10-27 11:32 大群有人“@鱼妹 在不在”，未读 30 条，跳过旧的 14 条后剩 16 条，
+      // 快照给了 11:07~11:17 的 12 条，叫她来的那条 @ 在后面 4 条里没放进来；提示让她接着读，她当成是更早的，
+      // 看着没人找她就走了，那人又问“人呢”。context.keepNewestInGroups:false 回到从早的给。
+      const callsHer = (m) => m.quoteTargetIsSelf || m.atSelf || m.talkBack || mentionsSelfNameV2(m.plain || m.text);
+      const picked = new Set();
+      const want = [...fresh.filter(callsHer).reverse(), ...[...fresh].reverse()];
+      for (const msg of want) {
+        if (picked.size >= maxUnread) break;
+        if (picked.has(msg) || !tryAdd('messages', msg)) continue;
+        picked.add(msg);
+      }
+      packet.messages.sort((a, b) => a.seq - b.seq);
+      middleHidden = fresh.filter((m) => !picked.has(m));
+      if (middleHidden.length) {
+        packet.middleSkipped = { count: middleHidden.length, from: whenV2(middleHidden[0].time), to: whenV2(middleHidden.at(-1).time) };
+        packet.readThroughSeq = readThroughSeqV2(st, [...staleHidden, ...middleHidden, ...packet.messages, ...packet.recent]);
+        packet.partial = shownCount() < st.unread.length;
+        log(`[reserved2] ${key} 快照放不下，中间 ${middleHidden.length} 条只给条数（${packet.middleSkipped.from}~${packet.middleSkipped.to}），留了最新的和叫她的 ${packet.messages.length} 条`);
+      }
+    } else if (v2ToolEnabled('getUnread')) {
       // Oldest unread first: a budget cutoff must not silently acknowledge unseen messages.
-      for (const msg of st.unread.filter((m) => !staleSeqs.has(m.seq)).slice(0, maxUnread)) if (!tryAdd('messages', msg)) break;
+      for (const msg of fresh.slice(0, maxUnread)) if (!tryAdd('messages', msg)) break;
     }
     if (staleShown.length) {
       // 跳过的那段的最后几句（unread 里的，给了就算看过）
@@ -452,7 +475,7 @@ export function createV2Messages(app) {
       packet.recent.reverse();
     }
     // 投递成功后连跳过的一起记成看过，游标才能越过它们
-    Object.defineProperty(packet, 'skippedEntries', { value: staleHidden });
+    Object.defineProperty(packet, 'skippedEntries', { value: [...staleHidden, ...middleHidden] });
     // 放进 recent 的旧未读：提示里写明是当时没接上的、话题多半过去了（不进 JSON）。
     // 2026-10-25 12:36 她来小群分享 2048，recent 里是 3 小时前阿明回她的“我给你说了呀”“你忘了”，
     // 没有 olderSkipped 就没有“别回头接”那句，她觉得晾着不好，又追问了一遍昨晚几点睡。

@@ -11,8 +11,8 @@ export function createLife(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, MOOD_STALE_MS, convLabelV2, crossSessionSummaryOnlyV2, emptyLifeV2, whenV2,
-    isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2, minutesRangeV2, nightCfgOkV2,
-    nightOwnerAwakeUntil, replyOnlyGroupV2, saveSocialV2State, sendWakePromptV2, sleepStateV2, socialV2;
+    isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2, lazyInBedV2, minutesRangeV2, nightCfgOkV2,
+    nightOwnerAwakeUntil, replyOnlyGroupV2, saveSocialV2State, sendWakePromptV2, sleepDayV2, sleepStateV2, socialV2;
 
   // ── qqbot_agent：她自己的心情、生活和主动找人（纯函数在 src/inner-life.js，要想的交给 extras/life.py）─────────
   // 心情 socialV2.moodEngine：一轮结束后 extras 体会一下她现在什么心情，按半衰期淡回平常，接到门控 / 条数 / 想玩什么上。
@@ -124,6 +124,8 @@ export function createLife(app) {
   }
   // 她的一天从起床算到睡觉：起床时间之前（凌晨被叫醒）还算前一天
   function lifeDayV2(now = Date.now()) {
+    const planned = sleepDayV2(now); // 开了 nightSleep.vary：按这晚实际的起床时间
+    if (planned) return planned;
     const n = nightCfgOkV2();
     const wake = n ? clockMinutes(n.to) : NaN;
     const d = new Date(now);
@@ -448,7 +450,7 @@ export function createLife(app) {
     if (now < L.initiateNextAt) return null;
     L.initiateNextAt = nextAt();
     saveSocialV2State();
-    if (isNightSleepV2() || !inClockWindow(c.from, c.to, new Date(now))) return null;
+    if (isNightSleepV2() || lazyInBedV2(now) || !inClockWindow(c.from, c.to, new Date(now))) return null;
     const targets = [];
     const skipped = [];
     for (const k of c.targets) {
@@ -540,8 +542,8 @@ export function createLife(app) {
     link() {
       ({
         FREE_TIME_REASONS, MOOD_STALE_MS, convLabelV2, crossSessionSummaryOnlyV2, emptyLifeV2,
-        whenV2, isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2, minutesRangeV2,
-        nightCfgOkV2, nightOwnerAwakeUntil, replyOnlyGroupV2, saveSocialV2State, sendWakePromptV2,
+        whenV2, isConversationBusyV2, isNightSleepV2, isOutsideGroupKeyV2, lazyInBedV2, minutesRangeV2,
+        nightCfgOkV2, nightOwnerAwakeUntil, replyOnlyGroupV2, saveSocialV2State, sendWakePromptV2, sleepDayV2,
         sleepStateV2, socialV2
       } = app);
     },

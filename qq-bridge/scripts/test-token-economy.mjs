@@ -274,6 +274,7 @@ await test('an in-flight wait rechecks mode permission before exposing a new arr
 });
 
 await test('building a budgeted snapshot preserves whole oldest messages without granting a receipt', async ({ h, st, request, append }) => {
+  h.cfg.socialV2.context.keepNewestInGroups = false; // 群里默认留最新的（见 test-stale-unread），这里测从早的给
   h.cfg.socialV2.context.wakeMessageLimit = 2;
   h.cfg.socialV2.context.wakeRecentLimit = 0;
   append('first'); append('second'); append('third');
@@ -311,6 +312,7 @@ await test('an in-flight wait rechecks paused, feature, tool and allowlist permi
 });
 
 await test('oversized first stored unread remains intact and cannot be skipped by the snapshot', async ({ h, st, request, append }) => {
+  h.cfg.socialV2.context.keepNewestInGroups = false; // 群里默认留最新的（见 test-stale-unread），这里测从早的给
   h.cfg.socialV2.context.wakeMaxChars = 500;
   // Existing bridge storage keeps head/tail excerpts. Distinct long excerpts
   // exceed this snapshot budget and must not be truncated a second time.

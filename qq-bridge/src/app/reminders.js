@@ -1,7 +1,7 @@
 // 答应了待会儿再做的事：提醒、等人说话、承诺提示、交给去玩的自己
 // 2026-10-24 从 bridge.js 的 main() 里拆出来，代码原样搬过来的；用到的别处的东西都从 app 拿（见 bridge.js 里“装配拆出去的模块”）。
 import { truncateText } from '../md-to-plain.js';
-import { inNightSleep, nextClockTime } from '../proactive-schedule.js';
+import { nextClockTime } from '../proactive-schedule.js';
 import { defang } from '../qq-model-view.js';
 import { SENSITIVE_RE } from '../sensitive.js';
 
@@ -11,13 +11,14 @@ export function createReminders(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let REMINDERS_MAX, crossSessionCountOnlyV2, getSocialV2State, whenV2, isConversationBusyV2,
-    isNightSleepV2, isOutsideGroupKeyV2, nightCfgOkV2, ownerAwakeV2, saveSocialV2State, sendWakePromptV2, socialV2,
+    asleepAtV2, isNightSleepV2, isOutsideGroupKeyV2, ownerAwakeV2, wakeAfterV2, saveSocialV2State, sendWakePromptV2, socialV2,
     v2ToolEnabled;
 
   // ── qqbot_agent：她答应了“待会儿/晚上/明天”再做的事（qq_remind_me） ───────────────────────────────
   // 以前她说“过会儿再截图给你们看”“明天接着答”，过了这一轮就没人叫她，答应的事从来没兑现过。
   // 现在记成提醒，到点 reminderTickV2 叫这个聊天回来：正在聊就插一句【到点了】，不在聊就用 reminder 唤醒；
   // 夜里睡着不叫（主人把她叫醒的那个窗口除外），醒了再叫。状态在 socialV2.reminders，存盘。
+  const clockOfV2 = (ts) => { const d = new Date(ts); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const REMINDER_PER_KEY = 5;
   const REMINDER_MAX_MINUTES = 2880;
   const REMINDER_STALE_MS = 12 * 3600 * 1000; // 到点后 12 小时还没叫到（一直睡着/会话被移出白名单）就算了
@@ -165,8 +166,7 @@ export function createReminders(app) {
     const id = `r${(now % 1e8).toString(36)}${(reminderSeq++).toString(36)}`;
     socialV2.reminders.push({ id, key, note, at: now, due, ...(wait ? { wait } : {}) });
     saveSocialV2State();
-    const n = nightCfgOkV2();
-    const asleep = n && inNightSleep(n, new Date(due));
+    const asleep = asleepAtV2(due);
     if (wait) {
       log(`[提醒] ${key} 记了一件事，等 ${wait.who}${wait.words.length ? ` 说“${wait.words.join('/')}”` : ' 说话'}（${wait.in === 'any' ? '哪里都算' : wait.in}），最晚 ${reminderWhenTextV2(due, now)}：${note}`);
       return {
@@ -177,7 +177,7 @@ export function createReminders(app) {
     log(`[提醒] ${key} 记了一件事，${reminderWhenTextV2(due, now)} 叫她：${note}`);
     return {
       ok: true, id, when: reminderWhenTextV2(due, now), reminders: reminderListV2(key, now),
-      hint: `记下了，${reminderWhenTextV2(due, now)} 这里会叫你回来做这件事。${asleep ? `那时候你在睡觉，要等早上 ${n.to} 起床才叫你，说的时候别说成半夜。` : ''}跟大家说一声“待会儿”就行，不用说你记了提醒。`,
+      hint: `记下了，${reminderWhenTextV2(due, now)} 这里会叫你回来做这件事。${asleep ? `那时候你在睡觉，要等早上 ${clockOfV2(wakeAfterV2(due))} 左右起床才叫你，说的时候别说成半夜。` : ''}跟大家说一声“待会儿”就行，不用说你记了提醒。`,
     };
   }
   // 到点了、还没给她看过的提醒（拼进这个会话的唤醒提示）
@@ -376,7 +376,7 @@ export function createReminders(app) {
     link() {
       ({
         REMINDERS_MAX, crossSessionCountOnlyV2, getSocialV2State, whenV2, isConversationBusyV2,
-        isNightSleepV2, isOutsideGroupKeyV2, nightCfgOkV2, ownerAwakeV2, saveSocialV2State, sendWakePromptV2, socialV2,
+        asleepAtV2, isNightSleepV2, isOutsideGroupKeyV2, ownerAwakeV2, wakeAfterV2, saveSocialV2State, sendWakePromptV2, socialV2,
         v2ToolEnabled
       } = app);
     },

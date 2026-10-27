@@ -207,7 +207,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
   vm.runInContext(`Object.assign(globalThis, (() => { ${modelViewSource}\nreturn { compactModelMessage, compactModelData, serializeModelData, isStickerMedia, stickerSummaryText, defang, dateTimeText }; })());`, context);
   // qqbot_agent：bridge.js 的顶层 import 被去掉了，作息表函数和 qq-model-view 一样注入进 context
   const scheduleSource = fs.readFileSync(path.join(root, 'src/proactive-schedule.js'), 'utf8').replace(/^export /gm, '');
-  vm.runInContext(`Object.assign(globalThis, (() => { ${scheduleSource}\nreturn { inNightSleep, proactiveSlot, nextClockTime, minutesUntilClock }; })());`, context);
+  vm.runInContext(`Object.assign(globalThis, (() => { ${scheduleSource}\nreturn { inNightSleep, proactiveSlot, nextClockTime, minutesUntilClock, nightPlan, sleepVaryCfg, localDay, shiftDay }; })());`, context);
   vm.runInContext(source + '\nglobalThis.auditReady = main();', context);
   const bridge = await context.auditReady;
   bridge.setPresets(['standard', 'qq-chat', 'qq-chat-v2', 'qq-play']);

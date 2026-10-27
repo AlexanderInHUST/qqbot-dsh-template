@@ -19,7 +19,12 @@ export function createWakeTriggers(app) {
     const reason = wakeTriggerReasonV2(key, st, event, plainContent, quoteTargetIsSelf);
     // 谁把她叫来的：接话（talkBack）在家里以外的群只认她直接在跟谁说
     const speakerId = String(event?.user_id ?? event?.sender?.user_id ?? '');
-    if (reason && speakerId) st.wakeBy = { userId: speakerId, at: Date.now() };
+    if (reason && speakerId) {
+      const now = Date.now();
+      st.wakeBy = { userId: speakerId, at: now };
+      // 这一阵叫过她的人都记着（10 分钟、最多 6 个）：一轮里先后有几个人叫她，只记最后一个会漏掉前面那个
+      st.wakeBys = [...(st.wakeBys || []).filter((w) => now - Number(w?.at || 0) <= 10 * 60000 && String(w?.userId) !== speakerId), st.wakeBy].slice(-6);
+    }
     return reason;
   }
   function wakeTriggerReasonV2(key, st, event, plainContent, quoteTargetIsSelf) {
@@ -285,6 +290,15 @@ export function createWakeTriggers(app) {
     if (declined === 'all' || declined?.has(speakerId)) return false;
     let first = last;
     while (first > 0 && recent[first - 1]?.isSelf) first--;
+    // 她最近这一轮说的话都算一段，中间被别人插了一句也是：2026-10-27 19:55 大群里她先引用阿明回了一句，
+    // 别人插了一句，她又补一句；阿明接着问她“那你懂这句‘爹’好笑在哪了吗？”，只看最后那一句就认不出主人在跟她说，没叫她，
+    // 阿明过了一分钟只好 @ 她“喂？”。
+    const turnAt = Number(st.wakeConfig?.lastWakeAt) || 0;
+    if (turnAt && turnAt <= lastAt) {
+      for (let i = first - 1; i >= 0 && (Number(recent[i]?.time) || 0) >= turnAt; i--) {
+        if (recent[i]?.isSelf && !recent[i]?.byPlay) first = i;
+      }
+    }
     const seenThrough = readThroughSeqV2(st);
     // 只发表情、或者这段话她已经有一回没接：只认她直接在跟着说的人
     if ((stickerOnly || declined) && !directPartnersV2(st, recent, first, last, seenThrough).has(speakerId)) return false;
@@ -297,7 +311,8 @@ export function createWakeTriggers(app) {
     const partners = outside || elapsed > windowMs ? directPartnersV2(st, recent, first, last, seenThrough) : new Set();
     if (!strict) {
       const near = new Set();
-      for (let i = first - 1; i >= 0 && near.size < c.partners; i--) {
+      // 从她最后一句往前数（这一轮里插进来、她看过的也算）
+      for (let i = last - 1; i >= 0 && near.size < c.partners; i--) {
         const m = recent[i];
         if (!m || m.isSelf || !m.userId) continue;
         if (lastAt - (Number(m.time) || 0) > 10 * 60000) break;
@@ -334,8 +349,10 @@ export function createWakeTriggers(app) {
     for (let i = first; i <= last; i++) for (const id of recent[i]?.toUserIds ?? []) if (id) partners.add(String(id));
     if (partners.size) return partners;
     const firstAt = Number(recent[first]?.time) || 0;
-    const wb = st.wakeBy;
-    if (wb?.userId && firstAt - Number(wb.at || 0) <= 10 * 60000 && Number(wb.at || 0) <= firstAt) partners.add(String(wb.userId));
+    const lastAt = Number(recent[last]?.time) || firstAt;
+    for (const wb of [...(st.wakeBys || []), st.wakeBy]) {
+      if (wb?.userId && firstAt - Number(wb.at || 0) <= 10 * 60000 && Number(wb.at || 0) <= lastAt) partners.add(String(wb.userId));
+    }
     for (let i = first - 1; i >= 0; i--) {
       const m = recent[i];
       if (!m || m.isSelf || !m.userId) continue;

@@ -1,6 +1,6 @@
 // 睡觉：夜里挡唤醒、主人叫醒、一起睡、到点收尾
 // 2026-10-24 从 bridge.js 的 main() 里拆出来，代码原样搬过来的；用到的别处的东西都从 app 拿（见 bridge.js 里“装配拆出去的模块”）。
-import { inNightSleep, minutesUntilClock, nextClockTime } from '../proactive-schedule.js';
+import { inNightSleep, localDay, minutesUntilClock, nextClockTime, nightPlan, shiftDay, sleepVaryCfg } from '../proactive-schedule.js';
 
 export function createNightSleep(app) {
   const {
@@ -21,9 +21,71 @@ export function createNightSleep(app) {
     const n = cfg.socialV2?.nightSleep ?? {};
     return { ...n, ownerAwakeMs: Math.max(60000, Number(n.ownerAwakeMs) || 20 * 60 * 1000) };
   }
-  // 固定的睡觉时间，或者她自己用 qq_go_to_sleep 提前睡了（见 selfSleptV2）
+  // 睡觉时间（固定的，或开了 nightSleep.vary 时这晚浮动的），或者她自己用 qq_go_to_sleep 提前睡了（见 selfSleptV2）
   function isNightSleepV2() {
-    return inNightSleep(cfg.socialV2?.nightSleep) || selfSleptV2();
+    return scheduledAsleepV2() || selfSleptV2();
+  }
+  function scheduledAsleepV2(now = Date.now()) {
+    if (!varyOnV2()) return inNightSleep(cfg.socialV2?.nightSleep, new Date(now));
+    const p = nightAtV2(now);
+    return !!p && now >= p.bedAt && now < p.wakeAt;
+  }
+
+  // ── 每晚浮动的睡觉、起床时间（nightSleep.vary，src/proactive-schedule.js 的 nightPlan）──
+  function varyOnV2() {
+    const n = nightCfgOkV2();
+    return !!n && sleepVaryCfg(n).enabled;
+  }
+  // day 那晚的安排，带上她这晚实际熬到多晚（说了去睡的时间、夜里陪主人聊到的时间，取落在这晚里最晚的）
+  function planOfV2(day) {
+    const n = nightCfgOkV2();
+    const base = nightPlan(n, day);
+    if (!base) return null;
+    const ups = [Number(socialV2.sleptAt) || 0, Number(socialV2.upLateAt) || 0].filter((t) => t > base.bedAt && t < base.wakeAt);
+    return ups.length ? nightPlan(n, day, { late: Math.max(...ups) - base.bedAt }) : base;
+  }
+  // ts 正在睡或接下来要睡的那一晚（起床时间在 ts 之后的第一晚）
+  function nightAtV2(ts) {
+    const today = localDay(ts);
+    for (const day of [shiftDay(today, -1), today, shiftDay(today, 1)]) {
+      const p = planOfV2(day);
+      if (p && ts < p.wakeAt) return p;
+    }
+    return null;
+  }
+  // ts 之前最近起床的那一晚
+  function lastNightV2(ts) {
+    const today = localDay(ts);
+    for (const day of [shiftDay(today, -1), shiftDay(today, -2)]) {
+      const p = planOfV2(day);
+      if (p && p.wakeAt <= ts) return p;
+    }
+    return null;
+  }
+  // ts 那时候是不是在睡觉时间（提醒用：到点时她睡着没）
+  function asleepAtV2(ts) {
+    const n = nightCfgOkV2();
+    return !!n && scheduledAsleepV2(ts);
+  }
+  // ts 之后第一次起床的时间
+  function wakeAfterV2(ts) {
+    const n = nightCfgOkV2();
+    if (!n) return NaN;
+    return varyOnV2() ? nightAtV2(ts)?.wakeAt ?? NaN : nextClockTime(n.to, ts);
+  }
+  // 她的一天从起床算到睡觉（开了 vary 才有，没开返回 null，用原来按 to 算的）
+  function sleepDayV2(now = Date.now()) {
+    return varyOnV2() ? nightAtV2(now)?.day ?? null : null;
+  }
+  // 醒了还赖在床上（开了 vary、这天早上抽到赖床）：能看手机回消息，不上电脑玩、不主动找人
+  function lazyInBedV2(now = Date.now()) {
+    if (!varyOnV2() || isNightSleepV2()) return false;
+    const last = lastNightV2(now);
+    return !!last && now < last.lazyUntil;
+  }
+  function clockTextV2(ts) {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }
   function ownerAwakeV2(key) {
     return (nightOwnerAwakeUntil.get(key) || 0) > Date.now();
@@ -38,6 +100,7 @@ export function createNightSleep(app) {
   }
   function noteOwnerNightWakeV2(key) {
     nightOwnerAwakeUntil.set(key, Date.now() + nightSleepCfgV2().ownerAwakeMs);
+    socialV2.upLateAt = Date.now(); // 陪主人聊到这时候，开了 vary 时第二天起得晚一点
     log(`[reserved2] 夜间睡觉：主人在 ${key} 叫醒了她`);
   }
   // 返回 true 表示这次唤醒被睡觉挡掉
@@ -69,7 +132,7 @@ export function createNightSleep(app) {
   function selfSleptV2(now = Date.now()) {
     const n = nightCfgOkV2();
     if (!n || !socialV2.sleptAt) return false;
-    const until = nextClockTime(n.to, socialV2.sleptAt);
+    const until = varyOnV2() ? nightAtV2(socialV2.sleptAt)?.wakeAt : nextClockTime(n.to, socialV2.sleptAt);
     return Number.isFinite(until) && now < until;
   }
   // 能不能用 qq_go_to_sleep：夜里，或睡觉时间前 nightSleep.earlySleepMinutes（默认 120）分钟以内
@@ -78,20 +141,42 @@ export function createNightSleep(app) {
     if (!n) return false;
     if (isNightSleepV2()) return true;
     const early = Math.max(0, Number(n.earlySleepMinutes ?? 120));
-    const left = minutesUntilClock(n.from, new Date(now));
+    const left = varyOnV2() ? (Number(nightAtV2(now)?.bedAt) - now) / 60000 : minutesUntilClock(n.from, new Date(now));
     return Number.isFinite(left) && left > 0 && left <= early;
   }
+  // bedClock / wakeClock 是给她看的“今晚几点睡”“明早几点起”；开了 vary 时 bedWhy / wakeWhy 是为什么跟平常不一样
   function sleepStateV2(now = Date.now()) {
     const n = nightCfgOkV2();
     if (!n) return { kind: 'off' };
+    const vary = varyOnV2();
     if (isNightSleepV2()) {
       const awakeKeys = [...nightOwnerAwakeUntil].filter(([, t]) => t > now).map(([k]) => k);
-      const early = !inNightSleep(n, new Date(now));
-      return { kind: awakeKeys.length ? 'woken' : 'asleep', awakeKeys, early };
+      const early = !scheduledAsleepV2(now);
+      const wakeAt = wakeAfterV2(now);
+      return { kind: awakeKeys.length ? 'woken' : 'asleep', awakeKeys, early, wakeAt, wakeClock: Number.isFinite(wakeAt) ? clockTextV2(wakeAt) : n.to };
     }
-    // 最近一次起床：now 之前 24 小时内的那个 to
-    const wokeAt = nextClockTime(n.to, now - 86400000);
-    return { kind: 'awake', wokeAt, toBedMin: minutesUntilClock(n.from, new Date(now)) };
+    if (!vary) {
+      // 最近一次起床：now 之前 24 小时内的那个 to
+      const wokeAt = nextClockTime(n.to, now - 86400000);
+      return { kind: 'awake', wokeAt, toBedMin: minutesUntilClock(n.from, new Date(now)), bedClock: n.from, wakeClock: n.to };
+    }
+    const last = lastNightV2(now);
+    const next = nightAtV2(now);
+    const wokeAt = last?.wakeAt ?? nextClockTime(n.to, now - 86400000);
+    const lazy = !!last && now < last.lazyUntil;
+    let bedWhy = '';
+    if (next?.bedOffset <= -15) bedWhy = '今天想早点睡';
+    else if (next?.weekend && next.bedOffset >= 15) bedWhy = '明天周末，可以晚点睡';
+    else if (next?.bedOffset >= 15) bedWhy = '今晚不太困，打算晚点睡';
+    let wakeWhy = '';
+    if (last?.sleepInMin >= 10) wakeWhy = '昨晚睡得晚，起得也晚了点';
+    else if (last?.weekend && last.wakeOffset >= 20) wakeWhy = '周末睡了个懒觉';
+    else if (last?.wakeOffset <= -10) wakeWhy = '醒得比平常早';
+    return {
+      kind: 'awake', wokeAt, lazy, lazyUntil: last?.lazyUntil ?? 0,
+      toBedMin: next ? Math.max(0, Math.round((next.bedAt - now) / 60000)) : NaN,
+      bedClock: next ? clockTextV2(next.bedAt) : n.from, wakeClock: next ? clockTextV2(next.wakeAt) : n.to, bedWhy, wakeWhy,
+    };
   }
 
   // 她说去睡了：所有地方一起睡。别的正在进行的窗口插一句让它收尾（自由时间那边也是），之后谁叫都不醒，只有主人亲自叫才醒。
@@ -100,7 +185,8 @@ export function createNightSleep(app) {
     if (!n) return { ok: false, error: '没有配置睡觉时间' };
     const now = Date.now();
     if (!earlySleepAllowedV2(now)) {
-      return { ok: false, error: `现在还不到睡觉的时候（每天 ${n.from} 睡、${n.to} 起）。真困了就用 qq_set_mood 记一下“有点困”，别跟大家说去睡了。` };
+      const when = varyOnV2() ? `今晚打算 ${sleepStateV2(now).bedClock} 左右睡` : `每天 ${n.from} 睡、${n.to} 起`;
+      return { ok: false, error: `现在还不到睡觉的时候（${when}）。真困了就用 qq_set_mood 记一下“有点困”，别跟大家说去睡了。` };
     }
     socialV2.sleptAt = now;
     socialV2.sleptKey = key;
@@ -115,9 +201,10 @@ export function createNightSleep(app) {
     }
     markReadCalledKeys.add(key);
     saveSocialV2State();
-    log(`[selfState] 夜间睡觉：${key} 说去睡了${note ? `（${note}）` : ''}，所有会话一起睡到 ${n.to}${woken.length ? `；之前被主人叫醒的 ${woken.join('、')} 也一起睡了` : ''}`);
+    const wakeClock = varyOnV2() ? clockTextV2(wakeAfterV2(now)) : n.to;
+    log(`[selfState] 夜间睡觉：${key} 说去睡了${note ? `（${note}）` : ''}，所有会话一起睡到 ${wakeClock}${woken.length ? `；之前被主人叫醒的 ${woken.join('、')} 也一起睡了` : ''}`);
     void steerSleepV2(key, 'self').catch(() => {});
-    return { ok: true, sleepUntil: n.to, hint: `睡了。别的窗口和电脑那边的你会自己收尾。晚安说过了就直接结束这一轮：不用 qq_wait_for_messages、不用再设唤醒。之后只有主人亲自叫你才会醒，明早 ${n.to} 起床。` };
+    return { ok: true, sleepUntil: wakeClock, hint: `睡了。别的窗口和电脑那边的你会自己收尾。晚安说过了就直接结束这一轮：不用 qq_wait_for_messages、不用再设唤醒。之后只有主人亲自叫你才会醒，明早 ${wakeClock} 起床。` };
   }
   // 往正在进行的其他会话里插一句让她收尾去睡。why：'self' 她自己在 fromKey 说了去睡；'night' 到了睡觉时间
   async function steerSleepV2(fromKey, why) {
@@ -172,8 +259,10 @@ export function createNightSleep(app) {
 
   return {
     exports: {
+      asleepAtV2,
       goToSleepV2,
       isNightSleepV2,
+      lazyInBedV2,
       nightCfgOkV2,
       nightOwnerAwakeUntil,
       nightSleepBlocksV2,
@@ -183,8 +272,10 @@ export function createNightSleep(app) {
       ownerAwakeV2,
       ownerCallsHerV2,
       selfSleptV2,
+      sleepDayV2,
       sleepStateV2,
       steerSleepV2,
+      wakeAfterV2,
     },
     link() {
       ({

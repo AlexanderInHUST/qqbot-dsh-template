@@ -27,7 +27,8 @@ export function createSelfNow(app) {
     const out = [];
     if (sleep.kind === 'woken') out.push('困得眼睛都睁不开');
     else if (sleep.kind === 'awake') {
-      if (now - sleep.wokeAt < 30 * 60000) out.push('刚起床，还有点迷糊');
+      if (sleep.lazy) out.push('醒了还赖在床上，不想起');
+      else if (now - sleep.wokeAt < 30 * 60000) out.push('刚起床，还有点迷糊');
       else if (Number.isFinite(sleep.toBedMin) && sleep.toBedMin <= 60) out.push('有点困了');
     }
     let sent = 0;
@@ -79,18 +80,20 @@ export function createSelfNow(app) {
     const n = nightCfgOkV2();
     const lines = [];
     const slot = proactiveSlot(cfg.socialV2?.proactive, new Date(now));
-    const slotLabel = String(slot?.label || slot?._说明 || '').trim();
+    let slotLabel = String(slot?.label || slot?._说明 || '').trim();
+    if (sleep.kind === 'awake' && slotLabel.includes('睡')) slotLabel = ''; // 睡觉时间每晚浮动时，作息表的“睡觉”段里她可能还醒着
     lines.push(`- 时间：${whenV2(now)} 星期${'日一二三四五六'[new Date(now).getDay()]}${slotLabel ? `（${slotLabel}）` : ''}`);
     if (sleep.kind === 'awake') {
       const lastNight = socialV2.sleptAt && socialV2.sleptAt < sleep.wokeAt && sleep.wokeAt - socialV2.sleptAt < 86400000 ? `，昨晚 ${whenV2(socialV2.sleptAt)} 睡的` : '';
-      lines.push(`- 睡觉：醒着。${whenV2(sleep.wokeAt)} 起的床${lastNight}；之前说过的“晚安”“去睡了”都是昨晚的事。今晚 ${n.from} 睡觉。`);
+      const woke = sleep.lazy ? `${whenV2(sleep.wokeAt)} 醒的，还赖在床上看手机，没起床（能回消息，不上电脑）` : `${whenV2(sleep.wokeAt)} 起的床${sleep.wakeWhy ? `（${sleep.wakeWhy}）` : ''}`;
+      lines.push(`- 睡觉：醒着。${woke}${lastNight}；之前说过的“晚安”“去睡了”都是昨晚的事。今晚 ${sleep.bedClock ?? n.from}${sleep.bedWhy ? ` 左右睡（${sleep.bedWhy}）` : ' 睡觉'}。`);
     } else if (sleep.kind === 'asleep') {
       const where = socialV2.sleptAt && selfSleptV2(now) && socialV2.sleptKey ? `${whenV2(socialV2.sleptAt)} 在${convLabelV2(socialV2.sleptKey, socialV2.conversations.get(socialV2.sleptKey), crossSessionSummaryOnlyV2(key))}说了去睡，` : '';
-      lines.push(`- 睡觉：${where}已经睡着了（${n.to} 起床）。`);
+      lines.push(`- 睡觉：${where}已经睡着了（${sleep.wakeClock ?? n.to} 起床）。`);
     } else if (sleep.kind === 'woken') {
       const here = sleep.awakeKeys.includes(key);
       const others = sleep.awakeKeys.filter((k) => k !== key).map((k) => convLabelV2(k, socialV2.conversations.get(k), crossSessionSummaryOnlyV2(key)));
-      lines.push(`- 睡觉：本来已经睡了，${here ? '是主人在这里把你叫醒的' : `主人在${others.join('、')}把你叫醒了，你在那边陪着`}；迷迷糊糊的，聊完接着睡（${n.to} 起床）。`);
+      lines.push(`- 睡觉：本来已经睡了，${here ? '是主人在这里把你叫醒的' : `主人在${others.join('、')}把你叫醒了，你在那边陪着`}；迷迷糊糊的，聊完接着睡（${sleep.wakeClock ?? n.to} 起床）。`);
     }
     // 电脑那边
     const playing = playingNowV2();

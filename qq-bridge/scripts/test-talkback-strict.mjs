@@ -347,5 +347,40 @@ await test('她直接在跟着说的人：只发表情也算接话；别人把�
   assert.equal(take(st), null, '旧字段');
 }));
 
+await test('一轮里她的话被别人插了一句：前面那句在跟谁说照样算（2026-10-27 19:55 大群）', () => fixture(async ({ h, group, take, seen, say }) => {
+  const key = 'group:789';
+  const st = group('789');
+  const pause = () => new Promise((r) => setTimeout(r, 5));
+  await say('789', 123, [text('鱼妹你看得懂这个图笑点吗')]);
+  assert.equal(take(st), 'nameMention');
+  st.wakeConfig.lastWakeAt = Date.now();
+  seen(st);
+  h.recordSentMessagesV2(key, ['看懂了，说睡了又爬起来喊爹']);
+  await pause();
+  await say('789', 123, [text('你看来没看懂金色马桶指的是啥')]);
+  assert.equal(take(st), 'talkBack');
+  await pause();
+  st.wakeConfig.lastWakeAt = Date.now();
+  await say('789', 444, [text('鱼妹去查查')]);
+  assert.equal(take(st), 'nameMention', '后来又有人叫她，wakeBy 换成了 444');
+  await say('789', 555, [text('帝皇吗')]);
+  seen(st);
+  await pause();
+  h.recordSentMessagesV2(key, ['我查了，金色马桶只找到黄金王座'], { toUserIds: ['123'] });
+  await say('789', 666, [text('鱼哥最近忙着玩ns2')]);
+  seen(st);
+  await pause();
+  h.recordSentMessagesV2(key, ['哦！是帝皇坐的那个黄金王座吗']);
+  await say('789', 123, [text('那你懂这句爹好笑在哪了吗？')]);
+  assert.equal(take(st), 'talkBack', '阿明是她这一轮引用着回的人');
+  // 上一轮的话不算进这一段：新一轮开始后她只说了一句，没引用谁
+  await pause();
+  st.wakeConfig.lastWakeAt = Date.now();
+  await pause();
+  h.recordSentMessagesV2(key, ['懂了懂了']);
+  await say('789', 222, [text('你们在聊啥')]);
+  assert.equal(take(st), null, '222 不是她在聊着的人');
+}));
+
 if (failures) { console.error(`\n${failures} 个失败`); process.exit(1); }
 console.log('\n全部通过');

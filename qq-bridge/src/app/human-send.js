@@ -130,6 +130,7 @@ export function createHumanSend(app) {
     const [kind, id] = key.split(':');
     const sent = [];
     const failed = [];
+    const unsent = []; // 发失败的那条和它后面没再发的
     let notSent = null;
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
@@ -138,6 +139,9 @@ export function createHumanSend(app) {
       app.sendChain = app.sendChain
         .then(async () => {
           if (notSent) { notSent.push(msg); return; }
+          // 一条发失败后面的就不发了：2026-10-27 15:45 第一条网络异常、第二条照发，
+          // 她以为都没发出去又整段重发，群里同一句出现两次、顺序还倒了。
+          if (failed.length) { unsent.push(msg); return; }
           if (i > 0 && interrupted && sent.length && !failed.length && interrupted()) {
             notSent = [msg];
             log(`[reserved2] 分条发送被插话打断 ${key}：发了 ${sent.length} 条，后面的不发了`);
@@ -150,16 +154,23 @@ export function createHumanSend(app) {
         .catch((error) => {
           log(`QQ 发送失败 (${key}):`, error?.message ?? error);
           failed.push(error);
+          unsent.push(msg);
         });
       if (i < delays.length) {
         const d = delays[i];
-        app.sendChain = app.sendChain.then(() => (notSent ? null : sleep(d)));
+        app.sendChain = app.sendChain.then(() => (notSent || failed.length ? null : sleep(d)));
       }
     }
     return app.sendChain.then(() => {
       if (failed.length > 0) {
-        const err = new Error(`QQ 发送失败 ${failed.length}/${messages.length} 条：${failed[0]?.message ?? '未知错误'}`);
+        // 错误文字会原样给她看，写清哪几条已经发出去了，免得她整段重发
+        const quote = (list) => list.map((m) => `「${String(m).slice(0, 60)}」`).join('');
+        const detail = sent.length
+          ? `已经发出去 ${sent.length} 条：${quote(sent)}，别再发；没发出去的 ${unsent.length} 条：${quote(unsent)}，要补只补这几条。`
+          : (messages.length > 1 ? `这 ${messages.length} 条都没发出去。` : '这条没发出去。');
+        const err = new Error(`QQ 发送失败：${failed[0]?.message ?? '未知错误'}。${detail}`);
         err.sent = sent.slice();
+        err.unsent = unsent.slice();
         throw err;
       }
       if (notSent) sent.notSent = notSent;

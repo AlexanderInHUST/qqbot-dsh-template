@@ -2762,7 +2762,9 @@ export function createConsoleServer(app) {
             const shot = await browserScreenshotV2(mcpUrl, body.tabIndex, browserLastPageV2[fromPlay ? 'play' : 'chat']);
             if (shot.buffer.length > MAX_MEDIA_BYTES) throw new Error('截图太大');
             const sent = await sendImageBufferV2(key, shot.buffer);
-            const text = `[截图:${truncateText(shot.tab.title || shot.tab.url, 60)}]`;
+            // about:blank / data: 上截的是她自己画的画，写明白（以前记成“[截图:about:blank]”，别人引用了她也认不出是哪张）
+            const drawn = /^(about:blank|data:)/.test(String(shot.tab.url || ''));
+            const text = drawn ? '[截图:自己画的画]' : `[截图:${truncateText(shot.tab.title || shot.tab.url, 60)}]`;
             st.recentMessages.push({
               messageId: sent.messageId ? String(sent.messageId) : null,
               ...selfSenderFieldsV2(sentByPlay(key, token)),

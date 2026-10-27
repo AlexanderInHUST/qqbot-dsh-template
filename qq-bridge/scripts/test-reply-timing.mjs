@@ -180,6 +180,25 @@ await test('合并唤醒：等对方说完再叫；没说完又补了一句就�
   assert.ok(t >= 2300 && t < 3300, `一直在说等了 ${t}ms`);
 }));
 
+await test('合并唤醒：群里只等叫她的人说完，旁人接着聊不拖（2026-10-27 19:57 大群）', () => fixture(async ({ h, conv, say, fired }) => {
+  const st = conv('group:789');
+  say('group:789', 777, '鱼妹在吗？');
+  st.wakeBy = { userId: '777', at: Date.now() };
+  h.scheduleWakeV2('group:789', 'nameMention');
+  let talking = true;
+  void (async () => { while (talking) { await sleep(150); if (talking) say('group:789', 888, '然后'); } })();
+  const t = await fired(st, 6000);
+  talking = false;
+  assert.ok(t < 900, `旁人在说也等了 ${t}ms`);
+  // 叫她的人自己还在说：照旧等他
+  const g = conv('group:456');
+  say('group:456', 777, '鱼妹我跟你说');
+  g.wakeBy = { userId: '777', at: Date.now() };
+  h.scheduleWakeV2('group:456', 'nameMention');
+  const t2 = await fired(g);
+  assert.ok(t2 >= 900, `话说一半只等了 ${t2}ms`);
+}));
+
 await test('合并唤醒：没开 replyTiming 照旧按 batchWindowMs', () => fixture(async ({ h, conv, say, fired }) => {
   const st = conv('private:123');
   say('private:123', 123, '在吗？');

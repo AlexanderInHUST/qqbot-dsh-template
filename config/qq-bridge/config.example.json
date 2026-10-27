@@ -369,7 +369,10 @@
       "enabled": true,
       "from": "23:30",
       "to": "08:00",
-      "ownerAwakeMs": 1200000
+      "ownerAwakeMs": 1200000,
+      "vary": {
+        "enabled": true
+      }
     },
     "groupChimeIn": {
       "enabled": true,
