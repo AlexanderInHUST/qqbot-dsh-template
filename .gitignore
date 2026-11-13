@@ -11,3 +11,4 @@ __pycache__/
 # qq-bridge 本地跑测试用的依赖和运行期状态
 qq-bridge/node_modules/
 qq-bridge/state/
+config/extras.json.bak*

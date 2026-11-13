@@ -3,11 +3,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+import { pinClock } from './lib/test-clock.mjs';
 import {
   bestThought, inClockWindow, initiateBlockReason, initiateCfg, initiateCfgFor, interestFactor, markInitiateAnswered,
   moodBubbleDelta, moodPhase, moodTalkFactor, updateInterest, activityMultipliers, likedKinds,
 } from '../src/inner-life.js';
 
+// 钉在下午两点：clock() 算的钟点不会跨过 0 点（以前 0 点前后跑会误报）
+pinClock('14:00');
 const clock = (minutesFromNow) => {
   const d = new Date(Date.now() + minutesFromNow * 60000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -185,18 +188,26 @@ test('兴趣：自由时间记见闻打的 interest 记到当时玩的那一类�
   assert.ok(ft.ideas.length >= 1);
 }));
 
+// extras 那边记着的计划（做没做的原件在 extras，2026-11-09 起）
+const PLAN_ITEMS = ['接着画小家伙', '问问爸爸几点睡'];
+const extrasPlan = { items: PLAN_ITEMS, at: Math.floor(Date.now() / 1000) - 3600, progress: {} };
 test('今天想的做了就更新：聊天里开过口、自由时间玩完各看一次；做了的不再挂着，都做了就说“接下来随便”', () => fixture(ON, {
   '/life/plan/progress': (b) => {
-    if (b.place === '电脑上自己玩的时候') return { ok: true, progress: [{ i: 0, status: 'done', how: '画好发群里了' }] };
-    return { ok: true, progress: [{ i: 1, status: 'done', how: '问到了，十二点半睡的' }, { i: 0, status: 'some', how: '起了个头' }, { i: 5, status: 'done' }] };
+    const said = b.place === '电脑上自己玩的时候'
+      ? [{ i: 0, status: 'done', how: '画好发群里了' }]
+      : [{ i: 1, status: 'done', how: '问到了，十二点半睡的' }, { i: 0, status: 'some', how: '起了个头' }, { i: 5, status: 'done' }];
+    const changed = said.filter((x) => b.items.some((o) => o.i === x.i));
+    for (const x of changed) extrasPlan.progress[String(x.i)] = { status: x.status, how: x.how, at: Math.floor(Date.now() / 1000), key: b.key };
+    return { ok: true, progress: changed, plan: JSON.parse(JSON.stringify(extrasPlan)) };
   },
+  '/life': () => ({ ok: true, plan: JSON.parse(JSON.stringify(extrasPlan)), threads: [], diary: null }),
   '/life/threads/update': () => ({ ok: true, threads: [] }),
   '/mood/appraise': () => ({ ok: true, mood: '平常', why: '', valence: 0, arousal: 0 }),
   '/life/diary': () => ({ ok: true, diary: { gist: 'x', text: 'x' } }),
 }, async ({ h, seen }) => {
   const day = h.lifeDayV2();
   h.socialV2.life.planDate = day;
-  h.socialV2.life.plan = { date: day, items: ['接着画小家伙', '问问爸爸几点睡'], at: Date.now() - 3600000, progress: {} };
+  h.lifeViewV2().plan = { date: day, items: [...PLAN_ITEMS], at: Date.now() - 3600000, progress: {} };
   const key = 'group:456';
   h.appendSocialV2Message(key, '阿明', '我12:30睡的', '我12:30睡的', false, true, 1, [], '42');
   h.innerLifeTurnEndedV2(key, { reason: { kind: 'completed' }, text: '' });
@@ -239,16 +250,22 @@ test('今天想的做了就更新：聊天里开过口、自由时间玩完各�
   await tick();
   assert.equal(seen.filter((x) => x.path === '/life/plan/progress').length, 2);
   h.cfg.socialV2.nightSleep = { enabled: true, from: clock(-10), to: clock(500) };
-  h.socialV2.life.plan.date = h.lifeDayV2(); // 测试里把起床时间挪到了后面，“今天”跟着往前挪一天
+  h.lifeViewV2().plan.date = h.lifeDayV2(); // 测试里把起床时间挪到了后面，“今天”跟着往前挪一天
   await h.lifeTickV2();
   assert.match(seen.find((x) => x.path === '/life/diary').body.plan, /接着画小家伙（做了：画好发群里了）/);
-  // 重启后还在
+  // 桥接不存计划（原件在 extras）；重启后从 extras 拉回来，做没做都还在
   const saved = h.loadLifeV2(JSON.parse(JSON.stringify(h.socialV2.life)));
-  assert.equal(saved.plan.progress[1].status, 'done');
-  assert.equal(saved.plan.progress[0].how, '画好发群里了');
-  assert.ok(saved.plan.at > 0 && saved.planCheckedAt[key] > 0);
+  assert.equal(saved.plan, undefined, '不存计划');
+  assert.ok(saved.planCheckedAt[key] > 0);
+  h.lifeViewV2().plan = null;
+  await h.refreshLifeViewV2(true);
+  const back = h.lifeViewV2().plan;
+  assert.equal(back.progress[1].status, 'done');
+  assert.equal(back.progress[0].how, '画好发群里了');
+  assert.ok(back.at > 1e12, 'extras 的秒换成毫秒');
+  assert.ok(seen.some((x) => x.path === '/life'));
   h.cfg.socialV2.life.planProgress = false;
-  h.socialV2.life.plan.progress = {};
+  h.lifeViewV2().plan.progress = {};
   h.cfg.socialV2.nightSleep = daytime();
   h.recordSentMessagesV2('group:789', ['嗯']);
   h.innerLifeTurnEndedV2('group:789', { reason: { kind: 'completed' }, text: '' });
@@ -257,7 +274,7 @@ test('今天想的做了就更新：聊天里开过口、自由时间玩完各�
 }));
 
 test('手上的事：自由时间玩完交给 extras 整理，下次去玩时提一句；玩完也体会一下心情', () => fixture(ON, {
-  '/life/threads/update': (b) => ({ ok: true, threads: [{ id: 'a1', title: '2048 冲 4096', next: '再玩几局', updated: 1 }], _items: b.items }),
+  '/life/threads/update': (b) => ({ ok: true, threads: [{ id: 'a1', title: '2048 冲 4096', next: '再玩几局', best: '合出过 256', updated: 1 }], _items: b.items }),
   '/mood/appraise': () => ({ ok: true, mood: '有点上头', why: '2048 差一点', valence: 1, arousal: 1, changed: true }),
 }, async ({ h, seen }) => {
   const play = h.getSocialV2State('play:main');
@@ -273,7 +290,7 @@ test('手上的事：自由时间玩完交给 extras 整理，下次去玩时提
   assert.equal(m.body.place, '电脑上自己玩的时候');
   assert.deepEqual(m.body.play, ['玩了 2048']);
   assert.equal(h.socialV2.mood.text, '有点上头');
-  assert.match(h.buildPlayWakePromptV2('proactiveCheck'), /【上次没弄完的】2048 冲 4096（再玩几局）/);
+  assert.match(h.buildPlayWakePromptV2('proactiveCheck'), /【上次没弄完的】2048 冲 4096（再玩几局），你最好的一次是合出过 256/);
   assert.ok(!h.buildPlayWakePromptV2('goPlay').includes('【上次没弄完的】'), '被托去办事不提');
   // 中途的回合（还有提醒在路上）不算玩完
   const n = seen.length;
@@ -305,6 +322,12 @@ test('今天想干嘛：醒着时一天想一次，写进【你现在】（大�
   h.socialV2.life.moodLog = [{ at: Date.now() - 3600000, text: '美滋滋', key: 'private:42' }];
   h.socialV2.life.dayPlay = [{ at: Date.now() - 7200000, what: '玩了 2048' }];
   h.cfg.socialV2.nightSleep = { enabled: true, from: clock(-10), to: clock(500) };
+  // 还陪着主人（叫醒的 20 分钟没过）不写；过了就写，哪怕她没调 qq_go_to_sleep、记录还没清（10-30、10-31 就是这样没写）
+  h.nightOwnerAwakeUntil.set('group:456', Date.now() + 600000);
+  await h.lifeTickV2();
+  assert.equal(seen.filter((x) => x.path === '/life/diary').length, 0, '陪着主人时不写');
+  h.nightOwnerAwakeUntil.set('group:456', Date.now() - 60000);
+  h.socialV2.life.diaryTriedAt = 0;
   await h.lifeTickV2();
   const diary = seen.filter((x) => x.path === '/life/diary');
   assert.equal(diary.length, 1);
@@ -316,8 +339,8 @@ test('今天想干嘛：醒着时一天想一次，写进【你现在】（大�
   assert.equal(seen.filter((x) => x.path === '/life/diary').length, 1);
   // 第二天醒来
   h.cfg.socialV2.nightSleep = daytime();
-  h.socialV2.life.diary.date = '2000-01-01';
-  h.socialV2.life.diary.at = Date.now() - 10 * 3600000;
+  h.lifeViewV2().diary.date = '2000-01-01';
+  h.lifeViewV2().diary.at = Date.now() - 10 * 3600000;
   assert.match(h.buildWakePromptV2('private:42', 'private'), /- 昨天：玩了2048，被夸了/);
 }));
 
@@ -410,7 +433,7 @@ test('主动找人：不熟的群在 byKey 里写了才找；单独想、不带�
     st.recentMessages.at(-1).time = Date.now() - 90 * 60000;
   }
   h.socialV2.mood = { text: '有点闷', why: '爸爸私聊里说要出差', at: Date.now(), source: 'self' };
-  h.socialV2.life.plan = { date: h.lifeDayV2(Date.now()), items: ['给爸爸画张画'] };
+  h.lifeViewV2().plan = { date: h.lifeDayV2(Date.now()), items: ['给爸爸画张画'], progress: {} };
   h.socialV2.life.initiateNextAt = Date.now() - 1000;
   // 90 分钟：家里的群够了，789 要 120 分钟
   assert.equal(await h.initiateTickV2(), null, '家里的群 3 分不够');
@@ -448,6 +471,125 @@ test('主动找人：不熟的群在 byKey 里写了才找；单独想、不带�
   h.socialV2.life.initiateNextAt = Date.now() - 1000;
   await h.initiateTickV2();
   assert.deepEqual(seen.filter((x) => x.path === '/proactive/think').at(-1).body.targets.map((t) => t.key), ['group:456']);
+}));
+
+test('主动找人：byKey 的 beforeBedMinutes 白天不找、快睡觉时才找（过了平常的 to 也找），提示里是睡前分享、别追问', () => fixture({
+  ...ON, initiate: { enabled: true, targets: ['group:456', 'private:42'], from: clock(-600), to: clock(-1), minSilenceMinutes: 60,
+    byKey: { 'group:456': { beforeBedMinutes: 120, perTargetPerDay: 1 } } },
+}, {
+  '/proactive/think': (b) => ({ ok: true, thoughts: b.targets.map((t) => ({ key: t.key, thought: '今天看到一只会开门的猫', kind: 'share', score: 4.5 })) }),
+}, async ({ h, seen }) => {
+  for (const k of ['group:456', 'private:42']) {
+    const st = h.getSocialV2State(k);
+    h.appendSocialV2Message(k, '阿明', '嗯', '嗯', false, true, 1, [], '42');
+    st.recentMessages.at(-1).time = Date.now() - 3 * 3600000;
+  }
+  // 离睡觉还有 5 个小时：小群不找；私聊过了平常的钟点也不找
+  h.socialV2.life.initiateNextAt = Date.now() - 1000;
+  assert.equal(await h.initiateTickV2(), null);
+  assert.equal(seen.filter((x) => x.path === '/proactive/think').length, 0);
+  // 再过一会儿就睡了：小群找，私聊还是不找
+  h.cfg.socialV2.nightSleep = { enabled: true, from: clock(60), to: clock(-300) };
+  h.socialV2.life.initiateNextAt = Date.now() - 1000;
+  const best = await h.initiateTickV2();
+  assert.equal(best?.key, 'group:456');
+  const think = seen.filter((x) => x.path === '/proactive/think').at(-1);
+  assert.deepEqual(think.body.targets.map((t) => t.key), ['group:456']);
+  assert.match(think.body.targets[0].note, /睡前/);
+  assert.equal(think.body.targets[0].bedtime, undefined);
+  const prompt = h.calls.prompts.map(promptText).find((t) => t.includes('【你想起一件事】'));
+  assert.match(prompt, /快睡觉了/);
+  assert.match(prompt, /别追问之前问过、催过的事/);
+  // 今天找过一次就够了
+  h.recordSentMessagesV2('group:456', ['今天看到一只会开门的猫']);
+  h.pendingWakeKeys.delete('group:456');
+  h.innerLifeTurnEndedV2('group:456', { reason: { kind: 'completed' }, text: '' });
+  h.getSocialV2State('group:456').recentMessages.forEach((m) => { m.time = Date.now() - 3 * 3600000; });
+  h.socialV2.life.initiateNextAt = Date.now() - 1000;
+  assert.equal(await h.initiateTickV2(), null);
+}));
+
+test('自由时间分享：byKey 的 beforeBedMinutes 白天不往那里发，快睡觉时能发；有人托的照发', () => fixture({
+  playShare: { enabled: true, byKey: { 'group:456': { beforeBedMinutes: 120 } } },
+}, {}, async ({ h }) => {
+  h.getSocialV2State('group:456');
+  assert.match(h.playShareGateV2('group:456', false) ?? '', /白天不用专门来说.*留到晚上快睡觉的时候/);
+  assert.equal(h.playShareGateV2('private:42', false), null, '别处照旧');
+  h.getSocialV2State('play:main').playRequests = [{ from: 'group:456', at: Date.now(), note: '看个视频' }];
+  assert.equal(h.playShareGateV2('group:456', false), null, '有人托的');
+  h.getSocialV2State('play:main').playRequests = [];
+  h.cfg.socialV2.nightSleep = { enabled: true, from: clock(90), to: clock(-300) };
+  assert.equal(h.playShareGateV2('group:456', false), null, '快睡觉了');
+}));
+
+const think = { big: false }; // 下面这个测试里 extras 想不想得出大事
+test('主动找人：只在睡前找的地方白天只说大事，一天一回，不占睡前那回', () => fixture({
+  ...ON, initiate: { enabled: true, targets: ['group:456'], from: clock(-600), to: clock(120), minSilenceMinutes: 60,
+    byKey: { 'group:456': { beforeBedMinutes: 90, perTargetPerDay: 1 } } },
+  nightSleep: { enabled: true, from: clock(300), to: clock(-600) },
+}, {
+  '/proactive/think': (b) => ({ ok: true, thoughts: b.targets.flatMap((t) => [
+    { key: t.key, thought: '今天看到一只会开门的猫', kind: 'share', score: 4.8, big: false },
+    ...(think.big ? [{ key: t.key, thought: '那关卡了三天终于过了', kind: 'share', score: 4.2, big: true }] : [])]) }),
+}, async ({ h, seen }) => {
+  const st = h.getSocialV2State('group:456');
+  h.appendSocialV2Message('group:456', '阿明', '嗯', '嗯', false, true, 1, [], '42');
+  const quiet = () => { st.recentMessages.forEach((m) => { m.time = Date.now() - 3 * 3600000; }); h.socialV2.life.initiateNextAt = Date.now() - 1000; };
+  // 白天：只有平常的念头就不找
+  think.big = false;
+  quiet();
+  assert.equal(await h.initiateTickV2(), null);
+  const t0 = seen.filter((x) => x.path === '/proactive/think').at(-1).body.targets[0];
+  assert.equal(t0.bigOnly, true);
+  assert.match(t0.note, /白天只说.*大事/);
+  // 有大事就去说，分低一点也是挑它
+  think.big = true;
+  quiet();
+  const best = await h.initiateTickV2();
+  assert.equal(best?.thought, '那关卡了三天终于过了');
+  assert.equal(h.socialV2.life.initiates.at(-1).big, true);
+  const prompt = h.calls.prompts.map(promptText).find((t) => t.includes('【你想起一件事】'));
+  assert.match(prompt, /忍不住马上就想告诉家里人/);
+  assert.match(prompt, /别的见闻留到睡前/);
+  h.recordSentMessagesV2('group:456', ['我终于过了那关！']);
+  h.pendingWakeKeys.delete('group:456');
+  h.innerLifeTurnEndedV2('group:456', { reason: { kind: 'completed' }, text: '' });
+  assert.equal(h.bigNewsLeftV2('group:456'), false);
+  // 今天的大事说过了：白天不再找
+  const n = seen.filter((x) => x.path === '/proactive/think').length;
+  quiet();
+  assert.equal(await h.initiateTickV2(), null);
+  assert.equal(seen.filter((x) => x.path === '/proactive/think').length, n);
+  // 快睡觉了：睡前那回照旧（大事不占 perTargetPerDay 和间隔）
+  h.cfg.socialV2.nightSleep = { enabled: true, from: clock(60), to: clock(-600) };
+  think.big = false;
+  quiet();
+  const bed = await h.initiateTickV2();
+  assert.equal(bed?.thought, '今天看到一只会开门的猫');
+  assert.equal(h.getSocialV2State('group:456').initiateThought.bedtime, true);
+  // bigNews.enabled=false：白天又不找了
+  h.cfg.socialV2.bigNews = { enabled: false };
+  assert.equal(h.bigNewsLeftV2('private:42'), false);
+}));
+
+test('自由时间分享：只在睡前分享的地方白天填了 big 的大事能发一回，不占睡前那回', () => fixture({
+  playShare: { enabled: true, byKey: { 'group:456': { beforeBedMinutes: 90, perConversationPerDay: 1 } } },
+  nightSleep: { enabled: true, from: clock(300), to: clock(-600) },
+}, {}, async ({ h }) => {
+  h.getSocialV2State('group:456');
+  assert.match(h.playShareGateV2('group:456', false) ?? '', /白天不用专门来说/);
+  assert.equal(h.playShareGateV2('group:456', false, { big: true }), null, '只查不记');
+  assert.equal(h.socialV2.playShares.length, 0);
+  assert.equal(h.playShareGateV2('group:456', true, { big: true }), null);
+  assert.equal(h.socialV2.playShares.at(-1).big, true);
+  assert.equal(h.playShareGateV2('group:456', true), null, '同一回里接着发截图');
+  const s = h.socialV2.playShares.at(-1);
+  s.at = s.lastAt = Date.now() - 20 * 60000;
+  assert.match(h.playShareGateV2('group:456', false, { big: true }) ?? '', /今天白天已经专门来这里说过一件大事了/);
+  assert.equal(h.bigNewsLeftV2('group:456'), false);
+  h.cfg.socialV2.nightSleep = { enabled: true, from: clock(60), to: clock(-600) };
+  assert.equal(h.playShareGateV2('group:456', true), null, '睡前那回照旧');
+  assert.equal(h.playShareGateV2('private:42', false, { big: true }), null, '别处照旧');
 }));
 
 test('关着的时候什么都不做：没有 extras 调用，【你现在】还是旧写法', () => fixture({}, {

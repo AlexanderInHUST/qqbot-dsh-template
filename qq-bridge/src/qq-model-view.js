@@ -61,6 +61,8 @@ function compactMedia(media, canResolveByMessage) {
     } else if (result.file === result.url) {
       delete result.file;
     }
+    // qqbot_agent：她自己发的画、截图存在 bridge 的 state/images 里，文件名对她没用
+    delete result.local;
     for (const key of ['file', 'url', 'faceId']) {
       if (isEmpty(result[key])) delete result[key];
     }

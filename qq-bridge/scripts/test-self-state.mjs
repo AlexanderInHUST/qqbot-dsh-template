@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+import { pinClock } from './lib/test-clock.mjs';
 
 // 相对现在的钟点 "HH:MM"
+// 钉在下午两点：clock() 算的钟点不会跨过 0 点（以前 0 点前后跑会误报）
+pinClock('14:00');
 const clock = (minutesFromNow) => {
   const d = new Date(Date.now() + minutesFromNow * 60000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -143,7 +146,7 @@ test('qq_go_to_sleep：正在进行的别的窗口和自由时间被插话收尾
   for (let i = 0; i < 40 && h.calls.prompts.filter((p) => p.mode === 'steer').length < 2; i += 1) await new Promise((res) => setTimeout(res, 25));
   const steers = h.calls.prompts.filter((p) => p.mode === 'steer').map(promptText);
   assert.equal(steers.length, 2, JSON.stringify(steers));
-  const playSteer = steers.find((t) => t.includes('qq_mark_read(key="play:main"'));
+  const playSteer = steers.find((t) => t.includes('qq_mark_read()'));
   assert.ok(playSteer?.includes('【你要去睡了】'), steers.join('\n---\n'));
   assert.ok(steers.some((t) => !t.includes('play:main') && t.includes('【你要去睡了】') && t.includes('qq_mark_read')));
   assert.equal(h.getSocialV2State('play:main').freeTime.curfewSent, true, '不再插【该睡觉了】');
@@ -167,6 +170,25 @@ test('到点睡觉：主人刚在聊的窗口先陪着，别的正在进行的�
   assert.ok(promptText(steers[0]).includes('【该睡觉了】'));
   assert.equal(h.nightSleepBlocksV2('group:456', 'anyMessage'), false, '主人在聊的窗口还醒着');
   assert.equal(h.nightSleepBlocksV2('group:789', 'atMention'), true);
+}));
+
+test('到点睡觉：家里以外的群里主人在跟别人聊、她没开口，不算陪着；陪着时主人跟别人说话也不叫她', () => fixture(daytime(), async ({ h }) => {
+  h.cfg.homeGroups = ['456'];
+  h.nightStartTickV2();
+  const say = (key, userId, isOwner) => h.appendSocialV2Message(key, `user-${userId}`, '昨天面试', '昨天面试', false, isOwner,
+    `fixture-${Math.random()}`, [], userId, []);
+  say('group:789', '42', true);
+  say('group:456', '42', true);
+  h.cfg.socialV2.nightSleep = { enabled: true, from: clock(-5), to: clock(300) };
+  h.nightStartTickV2();
+  assert.equal(h.ownerAwakeV2('group:789'), false, '大群里她没开口，不算在陪主人');
+  assert.equal(h.ownerAwakeV2('group:456'), true, '家里的小群照旧');
+  const ev = { self_id: 999, message: [{ type: 'text', data: { text: '？' } }] };
+  assert.equal(h.ownerCallsHerV2('group:456', ev, 'group', '？', false), true);
+  h.noteOwnerNightWakeV2('group:789');
+  assert.equal(h.ownerCallsHerV2('group:789', ev, 'group', '？', false), false, '大群里醒着时主人说的话不当成叫她');
+  const at = { self_id: 999, message: [{ type: 'at', data: { qq: '999' } }] };
+  assert.equal(h.ownerCallsHerV2('group:789', at, 'group', '', false), true, '@ 她照样叫');
 }));
 
 test('等待：状态变了在结果里给 yourStatusNow；别处说了去睡，等待提前返回', () => fixture(nearBed(), async ({ h, post }) => {

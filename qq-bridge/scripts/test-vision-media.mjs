@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { safeFetchBuffer } from '../src/safe-fetch.js';
+import { readSocialV2State } from '../src/state-blocks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -50,10 +51,10 @@ try {
 // 3. 桥接端点（可选）
 const consoleTokenFile = path.join(ROOT, 'state', 'console-token');
 const socialV2File = path.join(ROOT, 'state', 'social-v2.json');
-if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
+if (fs.existsSync(consoleTokenFile) && readSocialV2State(socialV2File).raw) {
   try {
     const consoleToken = fs.readFileSync(consoleTokenFile, 'utf8').trim();
-    const social = JSON.parse(fs.readFileSync(socialV2File, 'utf8'));
+    const social = readSocialV2State(socialV2File).raw;
     const conv = social?.conversations ? Object.entries(social.conversations)[0] : null;
     if (conv) {
       const [key, st] = conv;
@@ -72,7 +73,7 @@ if (fs.existsSync(consoleTokenFile) && fs.existsSync(socialV2File)) {
     console.log(`⚠️ 桥接端点检查跳过：${error?.message ?? error}`);
   }
 } else {
-  console.log('⚠️ 跳过桥接端点检查：缺少 state/console-token 或 state/social-v2.json');
+  console.log('⚠️ 跳过桥接端点检查：缺少 state/console-token 或二代状态（state/social-v2/）');
 }
 
 console.log(`\n结果：${passed} 通过，${failed} 失败`);

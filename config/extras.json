@@ -18,6 +18,7 @@
   },
   "memory": {
     "maxPerSubject": 40,
+    "maxPerOwner": 300,
     "maxSelf": 80,
     "recallPerSubject": 15,
     "maxChars": 0,
@@ -57,7 +58,18 @@
     "maxLogChars": 80
   },
   "people": {
-    "enabled": true
+    "enabled": true,
+    "ownerMaxChars": 1500,
+    "itemChars": 100,
+    "maxChars": 300,
+    "maxTotalChars": 900,
+    "versions": 5,
+    "sections": {
+      "了解": {"owner": 20, "friend": 5},
+      "在做": {"owner": 6},
+      "约定": {"owner": 8},
+      "最近": {"owner": 8, "friend": 2}
+    }
   },
   "bili": {
     "rewatchDays": 14

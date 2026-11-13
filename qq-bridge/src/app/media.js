@@ -176,6 +176,14 @@ export function createMedia(app) {
   }
 
   async function fetchOneBotImage(media) {
+    // qqbot_agent：她自己发的画、截图，bridge 存在 state/images 里（draw.js），直接读
+    if (media.local) {
+      const buf = app.readOwnImageV2(media.local);
+      const accepted = buf ? acceptImageBuffer(buf, '自己发的图') : null;
+      if (accepted) return accepted;
+      log(`[media] 自己发的图没存着了（${media.local}，只留几天）`);
+      return null;
+    }
     // 表情包（市场/收藏表情）优先走 CDN：get_image 对市场表情必然失败
     // （SnowLuma 缓存里没有该文件），先试 URL 能省一次失败往返，也更可靠。
     const emojiId = String(media.emojiId || emojiIdFromFileName(media.file) || '');

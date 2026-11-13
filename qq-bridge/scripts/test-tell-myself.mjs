@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 
+// 留话 2026-11-08 起并在 socialV2.notes 里（jobs.js），捎话是 kind 'tell'
+const tellNotes = (h) => (h.socialV2.notes ?? []).filter((n) => n.kind === 'tell');
 let failures = 0;
 async function test(name, run) {
   try { await run(); console.log('PASS', name); }
@@ -72,7 +74,7 @@ await test('只能从私聊和家里的群捎：大群、play 都拒', () => fix
   assert.equal(h.tellSourceOkV2(HOME), true);
   assert.equal(h.tellSourceOkV2(BIG), false);
   assert.equal(h.tellSourceOkV2(PLAY), false);
-  assert.equal((h.socialV2.tellNotes ?? []).length, 0);
+  assert.equal(tellNotes(h).length, 0);
   assert.equal(h.socialV2.playHold ?? null, null);
 }));
 
@@ -105,7 +107,7 @@ await test('那边正聊着：插一句【捎给自己的话】；大群里看�
   assert.match(text, /^【捎给自己的话】group:789（令牌 [0-9a-f]+）你 \d{4}-\d\d-\d\d \d\d:\d\d 在别处答应了：先不玩了，跟大家说一声晚点再玩/);
   assert.match(text, /别提是谁让的/);
   assert.doesNotMatch(text, /私聊/);
-  assert.equal((h.socialV2.tellNotes ?? []).length, 0, '插上了就不另外记');
+  assert.equal(tellNotes(h).length, 0, '插上了就不另外记');
   assert.match(r.data.hint, /正聊着，已经插了一句/);
 }));
 
@@ -122,7 +124,7 @@ await test('那边不在聊：记着，下次唤醒提示里写一次，投递�
   assert.match(h.buildWakePromptV2(HOME, 'reminder'), /【捎给自己的话】/);
   h.markTellShownV2(HOME);
   assert.equal(h.tellPromptLineV2(HOME), '');
-  assert.equal(h.socialV2.tellNotes.length, 0);
+  assert.equal(tellNotes(h).length, 0);
 }));
 
 await test('to=all：除了这里和电脑那边的都捎；大群那份写“别处”', () => fixture(async ({ h, tell, say }) => {
@@ -152,7 +154,7 @@ await test('stopPlay：电脑那边正玩着就插【先不玩了】、不再劝
   const r = await tell(PRIV, { stopPlay: true, minutes: 90 });
   assert.equal(r.status, 200, JSON.stringify(r.data));
   assert.equal(r.data.stopPlay.play, 'steered');
-  assert.match(steersTo(PLAY)[0], /^【先不玩了】[\s\S]*手上的马上停下[\s\S]*qq_mark_read\(key="play:main"/);
+  assert.match(steersTo(PLAY)[0], /^【先不玩了】[\s\S]*手上的马上停下[\s\S]*qq_mark_read\(\)/);
   assert.equal(play.freeTime.minUntil, 0);
   assert.equal(play.freeTime.asked.length, 0);
   assert.equal(play.freeTime.curfewSent, true);
@@ -224,12 +226,13 @@ await test('存盘：捎话和说好先不玩重启后读回，过期的不读',
   await tell(PRIV, { stopPlay: true, to: HOME, note: '跟大家说晚点再玩' });
   h.flushSocialV2State();
   const hold = JSON.parse(JSON.stringify(h.socialV2.playHold));
-  const notes = JSON.parse(JSON.stringify(h.socialV2.tellNotes));
+  const notes = JSON.parse(JSON.stringify(tellNotes(h)));
+  assert.ok(notes.length);
   h.socialV2.playHold = null;
-  h.socialV2.tellNotes = [];
+  h.socialV2.notes = [];
   h.loadSocialV2State();
   assert.deepEqual(JSON.parse(JSON.stringify(h.socialV2.playHold)), hold);
-  assert.deepEqual(JSON.parse(JSON.stringify(h.socialV2.tellNotes)), notes);
+  assert.deepEqual(JSON.parse(JSON.stringify(tellNotes(h))), notes);
   h.socialV2.playHold = { ...hold, until: Date.now() - 1000 };
   h.flushSocialV2State();
   h.socialV2.playHold = null;

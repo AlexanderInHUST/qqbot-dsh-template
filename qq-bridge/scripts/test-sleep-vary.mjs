@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { test } from 'node:test';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+import { pinClock } from './lib/test-clock.mjs';
 import { nightPlan, sleepVaryCfg, localDay, shiftDay } from '../src/proactive-schedule.js';
 
+// 钉在下午两点：clock() 算的钟点不会跨过 0 点（以前 0 点前后跑会误报）
+pinClock('14:00');
 const clock = (minutesFromNow) => {
   const d = new Date(Date.now() + minutesFromNow * 60000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;

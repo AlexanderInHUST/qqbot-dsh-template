@@ -8,7 +8,7 @@ export function createNightSleep(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, acknowledgeMessagesV2, convLabelV2, crossSessionSummaryOnlyV2,
-    getSocialV2State, isConversationBusyV2, isTimerWakeReason, mentionsSelfNameV2, readThroughSeqV2,
+    getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2, isTimerWakeReason, mentionsSelfNameV2, readThroughSeqV2,
     saveSocialV2State, scheduleWakeV2, socialV2, wakePriorityV2;
 
   // qqbot_agent：夜里固定睡觉。睡觉时间里谁叫都不醒（@、名字、提问、概率、回复检查、潜水到期、自由时间都不算），
@@ -93,7 +93,8 @@ export function createNightSleep(app) {
   // 主人这条消息算不算“亲自叫她”
   function ownerCallsHerV2(key, event, kind, plainContent, quoteTargetIsSelf) {
     if (kind === 'private') return true;
-    if (ownerAwakeV2(key)) return true;
+    // 家里以外的群：醒着陪主人的那一会儿，主人跟别人说的话不算叫她（接话、@ 之类照常按唤醒条件算）
+    if (ownerAwakeV2(key) && !isOutsideGroupKeyV2(key)) return true;
     const atSelf = Array.isArray(event?.message) && event.message.some((seg) => seg?.type === 'at' && String(seg.data?.qq) === String(event?.self_id ?? ''));
     if (atSelf || quoteTargetIsSelf) return true;
     return mentionsSelfNameV2(plainContent);
@@ -219,7 +220,7 @@ export function createNightSleep(app) {
       if (k === PLAY_KEY) {
         if (!FREE_TIME_REASONS.has(st.lastWakeReason)) continue;
         if (st.freeTime) st.freeTime.curfewSent = true; // 免得 freeTimeCurfewV2 再插一句【该睡觉了】
-        const markRead = `mcp__snowluma__qq_mark_read(key="${PLAY_KEY}", token=${st.agentToken})`;
+        const markRead = 'qq_mark_read()';
         text = why === 'self'
           ? `【你要去睡了】你刚在${from}说了要去睡觉，现在所有地方一起睡。手上的停下，关掉多余的标签页，调用 ${markRead}，明天再玩。`
           : `【该睡觉了】已经到睡觉时间啦。手上这个看完就收尾：关掉多余的标签页，调用 ${markRead}，明天再玩。`;
@@ -248,8 +249,13 @@ export function createNightSleep(app) {
     const now = Date.now();
     for (const [k, s] of socialV2.conversations) {
       if (k === PLAY_KEY) continue;
-      const lastOwner = (Array.isArray(s.recentMessages) ? s.recentMessages : []).filter((m) => m && !m.isSelf && m.isOwner).reduce((t, m) => Math.max(t, Number(m.time) || 0), 0);
-      if (lastOwner && now - lastOwner < awakeMs) {
+      const recent = Array.isArray(s.recentMessages) ? s.recentMessages : [];
+      const lastOwner = recent.filter((m) => m && !m.isSelf && m.isOwner).reduce((t, m) => Math.max(t, Number(m.time) || 0), 0);
+      // 家里以外的群里光主人说过话不算在跟她聊，她自己这段时间也得在这里说过话
+      // （2026-10-28 23:18 主人在大群跟别人聊面试，她 22:30 以后没开口，也被当成“陪着”，主人一句“？”就把她叫起来了）
+      const lastSelf = recent.filter((m) => m && m.isSelf && !m.byPlay).reduce((t, m) => Math.max(t, Number(m.time) || 0), 0);
+      const talking = !isOutsideGroupKeyV2(k) || (lastSelf && now - lastSelf < awakeMs);
+      if (lastOwner && now - lastOwner < awakeMs && talking) {
         nightOwnerAwakeUntil.set(k, lastOwner + awakeMs);
         log(`[reserved2] 夜间睡觉：到点时主人正在 ${k} 跟她聊，先陪着`);
       }
@@ -280,7 +286,7 @@ export function createNightSleep(app) {
     link() {
       ({
         FREE_TIME_REASONS, acknowledgeMessagesV2, convLabelV2, crossSessionSummaryOnlyV2,
-        getSocialV2State, isConversationBusyV2, isTimerWakeReason, mentionsSelfNameV2,
+        getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2, isTimerWakeReason, mentionsSelfNameV2,
         readThroughSeqV2, saveSocialV2State, scheduleWakeV2, socialV2, wakePriorityV2
       } = app);
     },

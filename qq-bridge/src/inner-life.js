@@ -131,6 +131,7 @@ export function initiateCfg(c = {}) {
     maxUnanswered: n(c.maxUnanswered, 2),
     unansweredResetDays: n(c.unansweredResetDays, 3),
     minSilenceMinutes: n(c.minSilenceMinutes, 60),
+    beforeBedMinutes: n(c.beforeBedMinutes, 0), // >0：只在离这晚睡觉不到这么多分钟时才找（睡前分享），0 = 不管
     answerWindowMinutes: { private: n(c.answerWindowMinutes?.private, 360), group: n(c.answerWindowMinutes?.group, 30) },
     from: String(c.from ?? '09:00'),
     to: String(c.to ?? '22:30'),
@@ -139,8 +140,8 @@ export function initiateCfg(c = {}) {
 }
 
 // 某一处单独的规矩（byKey 里的 threshold / perTargetPerDay / minIntervalMinutes / minSilenceMinutes /
-// declineCooldownMinutes / maxUnanswered / unansweredResetDays），没写的用全局的；globalPerDay 一直按全局算
-const PER_KEY = ['threshold', 'perTargetPerDay', 'minIntervalMinutes', 'minSilenceMinutes', 'declineCooldownMinutes', 'maxUnanswered', 'unansweredResetDays']
+// declineCooldownMinutes / maxUnanswered / unansweredResetDays / beforeBedMinutes），没写的用全局的；globalPerDay 一直按全局算
+const PER_KEY = ['threshold', 'perTargetPerDay', 'minIntervalMinutes', 'minSilenceMinutes', 'declineCooldownMinutes', 'maxUnanswered', 'unansweredResetDays', 'beforeBedMinutes']
 export function initiateCfgFor(c, key) {
   const o = c.byKey?.[key]
   if (!o || typeof o !== 'object') return c

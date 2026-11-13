@@ -199,7 +199,9 @@
       "noActionLimit": 3,
       "maxWakeConfigReminders": 2,
       "otherBots": [
-        "4000000009"
+        "4000000009",
+        "4000000010",
+        "4000000011"
       ]
     },
     "send": {
@@ -323,12 +325,12 @@
         15,
         30
       ],
+      "_sessionMinutes说明": "每次自由时间至少玩多久（分钟，随机）；没到时间想走会劝她接着玩，但不告诉她还差多久",
       "maxSessionMinutes": 60,
       "restMinutes": [
         60,
         120
       ],
-      "_sessionMinutes说明": "每次自由时间至少玩多久（分钟，随机）；没到时间想走会劝她接着玩，但不告诉她还差多久",
       "_restMinutes说明": "玩完一次后歇多久再检查要不要去玩"
     },
     "feedback": {
@@ -401,11 +403,12 @@
         },
         "group:1000000004": {
           "perConversationPerDay": 0
+        },
+        "group:1100000001": {
+          "beforeBedMinutes": 90,
+          "perConversationPerDay": 1
         }
       }
-    },
-    "replyTiming": {
-      "enabled": true
     },
     "replyGate": {
       "enabled": true,
@@ -456,7 +459,13 @@
       "enabled": true,
       "targets": [
         "group:1100000001"
-      ]
+      ],
+      "byKey": {
+        "group:1100000001": {
+          "beforeBedMinutes": 90,
+          "perTargetPerDay": 1
+        }
+      }
     },
     "selfCheck": {
       "enabled": true
@@ -465,19 +474,25 @@
       "group:800000002",
       "group:1100000003",
       "group:1000000004"
-    ]
+    ],
+    "noReachOut": [
+      "private:900000001"
+    ],
+    "replyTiming": {
+      "enabled": true
+    }
   },
   "webSearch": {
     "provider": "anthropic",
     "apiKey": "",
+    "_apiKey说明": "填 DeepSeek 的 Key（和 .env 的 DEEPSEEK_API_KEY 一样）：DSH 启动 MCP 时会删掉名字带 KEY 的环境变量，apiKeyEnv 读不到",
     "apiKeyEnv": "DEEPSEEK_API_KEY",
     "baseURL": "https://api.deepseek.com/anthropic/v1",
     "model": "deepseek-flash",
     "maxResults": 20,
     "timeoutMs": 120000,
     "maxUses": 5,
-    "maxTokens": 4096,
-    "_apiKey说明": "填 DeepSeek 的 Key（和 .env 的 DEEPSEEK_API_KEY 一样）：DSH 启动 MCP 时会删掉名字带 KEY 的环境变量，apiKeyEnv 读不到"
+    "maxTokens": 4096
   },
   "ownerTitlesGroups": [
     "1100000001"

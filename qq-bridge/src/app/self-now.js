@@ -12,7 +12,7 @@ export function createSelfNow(app) {
   let FREE_TIME_REASONS, PLAY_LAST_ITEM_MS, convLabelV2, crossSessionCountOnlyV2,
     crossSessionSummaryOnlyV2, whenV2, isConversationBusyV2, lifeLinesV2, moodEngineCfgV2,
     nightCfgOkV2, playHoldLineV2, playSessionsTextV2, selfClaimsLineV2, selfSleptV2, sleepStateV2, socialV2,
-    todayPlaySessionsV2;
+    todayPlaySessionsV2, awayLineV2, gameRestLineV2;
 
   // ── qqbot_agent：【你现在】她此刻的状态，所有会话（几个聊天 + 自由时间）看到的是同一份 ─────────────
   // 睡没睡、电脑上在玩什么、别处在跟谁聊、她自己定的心情（qq_set_mood）、bridge 算的身体感受。
@@ -83,6 +83,10 @@ export function createSelfNow(app) {
     let slotLabel = String(slot?.label || slot?._说明 || '').trim();
     if (sleep.kind === 'awake' && slotLabel.includes('睡')) slotLabel = ''; // 睡觉时间每晚浮动时，作息表的“睡觉”段里她可能还醒着
     lines.push(`- 时间：${whenV2(now)} 星期${'日一二三四五六'[new Date(now).getDay()]}${slotLabel ? `（${slotLabel}）` : ''}`);
+    const birthday = app.birthdayLineV2?.() ?? '';
+    if (birthday) lines.push(birthday);
+    const changed = app.growthNoticeLineV2?.() ?? '';
+    if (changed) lines.push(changed);
     if (sleep.kind === 'awake') {
       const lastNight = socialV2.sleptAt && socialV2.sleptAt < sleep.wokeAt && sleep.wokeAt - socialV2.sleptAt < 86400000 ? `，昨晚 ${whenV2(socialV2.sleptAt)} 睡的` : '';
       const woke = sleep.lazy ? `${whenV2(sleep.wokeAt)} 醒的，还赖在床上看手机，没起床（能回消息，不上电脑）` : `${whenV2(sleep.wokeAt)} 起的床${sleep.wakeWhy ? `（${sleep.wakeWhy}）` : ''}`;
@@ -114,6 +118,11 @@ export function createSelfNow(app) {
     // 答应了先不玩（别的窗口用 qq_tell_myself 捎来的）
     const hold = playHoldLineV2(key, now);
     if (hold) lines.push(hold);
+    // 刚才整个关掉了一阵、陪人打游戏打累了（away.js）
+    const away = awayLineV2(key, now);
+    if (away) lines.push(away);
+    const gameRest = gameRestLineV2(key, now);
+    if (gameRest) lines.push(gameRest);
     const sessions = todayPlaySessionsV2(sleep, now);
     if (sessions.length) {
       const mins = sessions.reduce((n, x) => n + Math.max(1, Math.round(((x.end || now) - x.start) / 60000)), 0);
@@ -158,7 +167,7 @@ export function createSelfNow(app) {
     lines.push(...life);
     const claims = selfClaimsLineV2(key, sleep, now);
     if (claims) lines.push(claims);
-    const sig = JSON.stringify([sleep.kind, sleep.awakeKeys || [], playing, page, lastItem?.at || 0, mood?.at || 0, phase, chats.busy, body, life, sessions.length, claims, hold]);
+    const sig = JSON.stringify([sleep.kind, sleep.awakeKeys || [], playing, page, lastItem?.at || 0, mood?.at || 0, phase, chats.busy, body, life, sessions.length, claims, hold, away, gameRest]);
     // 网页标题、心情原因、她说过的话都可能带【】，别让它们看着像一段提示
     return { lines: lines.map(defang), sig };
   }
@@ -189,7 +198,7 @@ export function createSelfNow(app) {
         FREE_TIME_REASONS, PLAY_LAST_ITEM_MS, convLabelV2, crossSessionCountOnlyV2,
         crossSessionSummaryOnlyV2, whenV2, isConversationBusyV2, lifeLinesV2, moodEngineCfgV2,
         nightCfgOkV2, playHoldLineV2, playSessionsTextV2, selfClaimsLineV2, selfSleptV2, sleepStateV2, socialV2,
-        todayPlaySessionsV2
+        todayPlaySessionsV2, awayLineV2, gameRestLineV2
       } = app);
     },
     start() {},

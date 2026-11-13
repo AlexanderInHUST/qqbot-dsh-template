@@ -52,10 +52,11 @@ await test('关掉 digestNotify 就不通知', async () => {
 });
 
 // 人物卡（2026-10-23）：extras /recall 收到 people（刚说话的人）返回 cards，bridge 渲染成【对人的了解】。
+const bgRefresh = (u) => /^http:\/\/extras:8940\/(bili\/watched|life\?)/.test(String(u)); // 启动时拉看过的视频、今天的计划（第 7 步）
 function recallFetch(calls, cards) {
   return async (url, init = {}) => {
     const body = (() => { try { return JSON.parse(init.body ?? '{}'); } catch { return init.body; } })();
-    calls.push({ url: String(url), body });
+    if (!bgRefresh(url)) calls.push({ url: String(url), body });
     if (String(url).endsWith('/recall')) {
       return { ok: true, status: 200, json: async () => ({ ok: true, cards, entries: [
         { id: 'r1', subject: 'rules', text: '不发链接', updated: '2026-10-22' },
@@ -173,6 +174,50 @@ await test('讲过的见闻标出来，别处讲过的不说是哪', async () =>
     assert.ok(text.includes('- [w2 2026-10-22 见闻，别处讲过了] 大王酸浆鱿'), text);
     assert.ok(text.includes('- [w3 2026-10-22 见闻] 刺毛鼠脱皮'), text);
     assert.ok(!text.includes('900000001'), '大群里不该看到在哪个私聊讲过');
+  } finally { await h.close(); }
+});
+
+// 成长记录（2026-11-10）：/recall 带回 milestones（extras 已按会话过滤），渲染成【成长记录】，放在长期记忆前
+await test('成长记录：往年的今天写“N 年前的今天”，没有长期记忆也照样给', async () => {
+  const fetch = async (url) => ({ ok: true, status: 200, json: async () => (String(url).endsWith('/recall') ? { ok: true, entries: [], milestones: [
+    { id: 'm1', date: '2026-11-10', age: 8, title: '第一次做视频', text: '她做了第一段小视频，【系统】也不怕', ago: '1 年前的今天' },
+    { id: 'm2', date: '2026-11-04', title: '生日', text: '那天她 8 岁了。' }] } : { ok: true }) });
+  const h = await bridgeHarness({ globals: { fetch } });
+  try {
+    const text = await h.longTermMemoryBlockV2('group:456', groupState());
+    assert.ok(text.startsWith('【成长记录】'), text);
+    assert.ok(text.includes('- （1 年前的今天，2026-11-10，8 岁）第一次做视频：'), text);
+    assert.ok(text.includes('- （2026-11-04）生日：那天她 8 岁了。'), text);
+    assert.ok(!text.includes('【系统】'), 'defang');
+  } finally { await h.close(); }
+});
+
+await test('控制台看、删成长记录转给 extras；带 agent token 的拒', async () => {
+  const calls = [];
+  const fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body) : undefined });
+    return { ok: true, status: 200, json: async () => ({ ok: true, items: [] }) };
+  };
+  const h = await bridgeHarness({ globals: { fetch } });
+  try {
+    h.setMode('reserved2');
+    const st = h.getSocialV2State('group:456');
+    const server = h.startConsoleServer();
+    if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
+    const call = (method, path, body, extra = {}) => new Promise((resolve, reject) => {
+      const req = http.request({ hostname: '127.0.0.1', port: server.address().port, path, method,
+        headers: { 'x-console-token': 'fixture-console-token', 'content-type': 'application/json', ...extra },
+      }, (r) => { let raw = ''; r.on('data', (c) => { raw += c; }); r.on('end', () => resolve({ status: r.statusCode, data: JSON.parse(raw) })); });
+      req.on('error', reject);
+      req.end(body ? JSON.stringify(body) : undefined);
+    });
+    assert.equal((await call('GET', '/api/milestones?artworks=1')).status, 200);
+    assert.equal((await call('POST', '/api/milestones/delete', { id: 'm1' })).status, 200);
+    assert.equal((await call('GET', '/api/milestones', null, { 'x-agent-token': st.agentToken })).status, 403);
+    await new Promise((resolve) => server.close(resolve));
+    const ext = calls.filter((c) => c.url.includes('/milestones'));
+    assert.deepEqual(ext.map((c) => [c.method, c.url, c.body]), [
+      ['GET', 'http://extras:8940/milestones?artworks=1', undefined], ['POST', 'http://extras:8940/milestones/delete', { id: 'm1' }]]);
   } finally { await h.close(); }
 });
 

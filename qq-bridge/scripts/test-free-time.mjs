@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_ACTIVITIES, activityOf, pickActivities, recentUse, varietyHint, ideasText } from '../src/free-time.js';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+import { readSocialV2State } from '../src/state-blocks.js';
 
 let failures = 0;
 async function test(name, run) {
@@ -78,7 +79,7 @@ await test('桥接：自由时间唤醒带上念头，计数游戏/新页面/搜
     // 怎么收尾、什么时候歇这些规矩在 qq-play 的系统提示里，不在每次的唤醒提示里重复
     assert.ok(!text.includes('【可以歇了】'), '规矩不在唤醒提示里重复');
     const playPreset = fs.readFileSync(new URL('../dsh/agent-presets/qq-play/agent.cordis.yml', import.meta.url), 'utf8');
-    assert.ok(playPreset.includes('qq_mark_read(key="play:main"') && playPreset.includes('【可以歇了】'), '系统提示里讲了收尾和【可以歇了】');
+    assert.ok(playPreset.includes('qq_mark_read()') && playPreset.includes('【可以歇了】'), '系统提示里讲了收尾和【可以歇了】');
     const ft = st.freeTime;
     assert.equal(ft.ideas.length, 3);
     assert.equal(h.socialV2.freeTimeHistory.at(-1).key, key, '全局历史里记一条');
@@ -112,11 +113,11 @@ await test('桥接：自由时间唤醒带上念头，计数游戏/新页面/搜
     watch('BV1ibpq6tE18', '8个顶级AI挑战RPG史上最恶意BOSS');
     watch('BV1aaaaaaaaa', '会开门的狗 "原声"');
     watch('BV1ibpq6tE18', '8个顶级AI挑战RPG史上最恶意BOSS');
-    assert.deepEqual([...h.socialV2.watchedVideos.map((v) => v.bvid)], ['BV1aaaaaaaaa', 'BV1ibpq6tE18'], '同一个视频只记一次，挪到最新');
+    assert.deepEqual([...h.watchedVideosV2().map((v) => v.bvid)], ['BV1aaaaaaaaa', 'BV1ibpq6tE18'], '同一个视频只记一次，挪到最新');
     const again = h.buildWakePromptV2(key, 'proactiveCheck');
     assert.ok(again.includes('最近看过的视频') && again.includes('《8个顶级AI挑战RPG史上最恶意BOSS》BV1ibpq6tE18') && again.includes('《会开门的狗 "原声"》'), again);
     for (let i = 0; i < 25; i += 1) watch(`BV1${String(i).padStart(9, '0')}`, `视频${i}`);
-    assert.equal(h.socialV2.watchedVideos.length, 20, '只留最近 20 个');
+    assert.equal(h.watchedVideosV2().length, 20, '只留最近 20 个');
   } finally { await h.close(); }
 });
 
@@ -250,14 +251,14 @@ await test('桥接：到了定的时间说一声可以歇了；玩满上限或�
     await h.freeTimeCurfewV2();
     assert.equal(steers().length, 1);
     const offer = steers()[0].content[0].text;
-    assert.ok(offer.includes('【可以歇了】') && offer.includes('还想玩就接着玩') && offer.includes(st.agentToken), offer);
+    assert.ok(offer.includes('【可以歇了】') && offer.includes('还想玩就接着玩') && offer.includes('qq_mark_read()') && !offer.includes(st.agentToken), offer);
     await h.freeTimeCurfewV2();
     assert.equal(steers().length, 1, '可以歇了只说一次');
     st.freeTime.startedAt = Date.now() - 181 * 60000;
     await h.freeTimeCurfewV2();
     assert.equal(steers().length, 2);
     const text = steers()[1].content[0].text;
-    assert.ok(text.includes('【玩了好久了】') && text.includes('qq_mark_read(key="play:main"') && text.includes(st.agentToken), text);
+    assert.ok(text.includes('【玩了好久了】') && text.includes('qq_mark_read()') && !text.includes(st.agentToken), text);
     await h.freeTimeCurfewV2();
     assert.equal(steers().length, 2, '只提醒一次');
     // 换成刚开始玩、到了睡觉时间
@@ -332,7 +333,7 @@ await test('桥接：下次自由时间检查的时间存盘，重启后接着�
     assert.equal(h.socialV2.proactiveNextAt, next, '重启后读回存的时间');
     h.socialV2.proactiveNextAt = next + 1000;
     h.flushSocialV2State();
-    const saved = JSON.parse(fs.readFileSync(path.join(h.temp, 'state/social-v2.json'), 'utf8'));
+    const saved = readSocialV2State(path.join(h.temp, 'state/social-v2.json')).raw;
     assert.equal(saved.proactiveNextAt, next + 1000, '存盘时带上');
   } finally { await h.close(); }
   h = await bridgeHarness({ files: { 'state/social-v2.json': { proactiveNextAt: Date.now() + 48 * 3600 * 1000, conversations: {} } } });
@@ -344,8 +345,9 @@ await test('桥接：下次自由时间检查的时间存盘，重启后接着�
 await test('桥接：状态攒一下再写，一秒内改多少次只写一回；flush 马上写', async () => {
   const h = await bridgeHarness({ files: { 'state/social-v2.json': { conversations: {} } } });
   try {
-    const file = path.join(h.temp, 'state/social-v2.json');
-    const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+    // proactiveNextAt 在自由时间那块（state/social-v2/play.json）
+    const file = path.join(h.temp, 'state/social-v2/play.json');
+    const read = () => JSON.parse(fs.readFileSync(file, 'utf8')).data;
     h.flushSocialV2State();
     const before = fs.statSync(file).mtimeMs;
     for (let i = 1; i <= 5; i++) { h.socialV2.proactiveNextAt = Date.now() + i * 60000; h.saveSocialV2State(); }
@@ -367,3 +369,32 @@ await test('桥接：状态攒一下再写，一秒内改多少次只写一回�
 if (failures) { console.error(`\n${failures} 项失败`); process.exit(1); }
 console.log('\n全部通过');
 process.exit(0);
+
+await test('看过的视频以 extras 为准：桥接从 /bili/watched 拉一份放内存，不存进 play.json', async () => {
+  const asked = [];
+  const fetch = async (url) => {
+    const u = String(url);
+    if (u.startsWith('http://extras:8940/bili/watched')) {
+      asked.push(u);
+      return { ok: true, status: 200, json: async () => ({ ok: true, videos: [
+        { bvid: 'BV1aaaaaaaaa', title: '会开门的狗', at: 1700000000 },
+        { bvid: 'not-a-bvid', title: '坏的', at: 1 },
+        { bvid: 'BV1bbbbbbbbb', title: '最新看的', at: 1700000100 },
+      ] }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ status: 'ok', retcode: 0, data: {} }) };
+  };
+  const h = await bridgeHarness({ globals: { fetch } });
+  try {
+    await h.refreshWatchedVideosV2(true);
+    assert.match(asked.at(-1), /limit=20$/);
+    assert.deepEqual(h.watchedVideosV2().map((v) => v.bvid), ['BV1aaaaaaaaa', 'BV1bbbbbbbbb'], '认不出的 BV 号丢掉');
+    assert.equal(h.watchedVideosV2()[0].at, 1700000000 * 1000, '秒换成毫秒');
+    const p = h.buildWakePromptV2('play:main', 'proactiveCheck');
+    assert.ok(p.indexOf('《最新看的》BV1bbbbbbbbb') >= 0 && p.indexOf('《最新看的》') < p.indexOf('《会开门的狗》'), '最新的在前');
+    assert.equal(await h.refreshWatchedVideosV2(), null, '10 分钟内不再拉');
+    h.flushSocialV2State();
+    const rec = JSON.parse(fs.readFileSync(path.join(h.temp, 'state/social-v2/play.json'), 'utf8'));
+    assert.equal(rec.data.watchedVideos, undefined, '不存');
+  } finally { await h.close(); }
+});

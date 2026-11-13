@@ -5,7 +5,7 @@
 # 工具名会变成 mcp__sandbox-browser__* / mcp__sandbox-browser-chat__* / mcp__sandbox-desktop__* / mcp__qqbot-extras__*，
 # 与 qq-bridge/plugins/qq-agent-presets/qq-tool-restrict.mjs 里守卫放行的前缀一一对应，改名要两边一起改。
 # 地址指向 mcp-gw（只会把流量转进沙箱的中转容器），见 docker-compose.yml。
-# toolCallTimeoutMs 都设成计时器上限 2147483647（约 24.8 天），等于不限时：不设就是默认 60 秒。
+# toolCallTimeoutMs 都设成计时器上限 2147483647（约 24.8 天），等于不限时（extras 除外，见下面）：不设就是默认 60 秒。
 # 以前按工具估时间（浏览器 120 秒、extras 300 秒），长视频 bili_watch 超过 5 分钟就报 Request timed out，
 # 她重试时上一次还在后台跑，两次抢同一个标签页（2026-10-22）。
 
@@ -42,13 +42,27 @@
         serverName: qqbot-extras
         transport: streamable-http
         url: http://extras:8940/mcp
-        toolCallTimeoutMs: 2147483647
+        # extras 例外：30 分钟。它最慢的 bili_watch 也就六七分钟；2026-11-05 一次回复没发出去（半个 emoji），
+        # 不限时就让自由时间那一轮卡了两天半，之后的唤醒全排在队列里
+        toolCallTimeoutMs: 1800000
+
+# 官方 DeepSeek 连不上时要快点报错，bridge 好换成 aiohub 的同一个模型（qq-bridge/src/app/model-fallback.js，2026-11-03）。
+# 默认是流 300 秒没动静才算超时、再同一个供应商重试 5 次，最坏要半个多小时才轮到 bridge 换；
+# 现在 90 秒没动静算超时（思考时也一直在出字，正常不会停这么久），重试 2 次。原来没有 config，整条覆盖不丢东西。
+- id: llm-deepseek
+  config:
+    streamIdleTimeoutMs: 90000
+    retryPolicy:
+      mode: normal
+      maxRetries: 2
 
 # 现在用的是 DSH 自带的 deepseek-official（Key 是环境变量 DEEPSEEK_API_KEY，bridge 的 config.json dsh 段选它）。
 # 下面的中转站 aiohub（OpenAI Chat Completions 协议）和 aiohub-gemini / gemini-4-argon 留着备用，Key 是环境变量 AIOHUB_API_KEY；
 # gemini-4-argon 2026-10-22 测过能力齐全，但回复太慢（私聊约 30 秒、群里约 1.5 分钟），没用。
 # cloudflare（Workers AI 上的同一个 DeepSeek 模型，Key 是 CLOUDFLARE_API_TOKEN）2026-10-22 也测过：能用、缓存也命中，
 # 但会话十几万 token 时每步 4~11 秒（官方 1~2 秒），也没用。aiohub 的 qwen3.8-27b 窗口只有约 128k、没有前缀缓存，没配。
+# 中转站一次请求超过 32 张图会报 400，所以每个供应商都写 maxRequestImages 28（DSH 默认 50）：超了 DSH 把最早的 6 张换成文字占位
+# （DSH 0.2.2 起有这个配置，以前是 control/patch-pi-ai-image-count.mjs 补丁加的）。
 # 注意：这一条会整体覆盖 llm-pi-ai 的配置；在 Web UI 的 Models 页里加的其他 pi-ai 供应商会被它盖掉，要加就加在这里。
 # 2026-10-21 实测：该模型总是会思考；reasoning_effort 有效，high 的思考长度约为 low 的 4~10 倍；developer 角色、max_completion_tokens 都接受；支持图片输入。
 - id: llm-pi-ai
@@ -59,6 +73,8 @@
         apiKeyEnv: AIOHUB_API_KEY
         api: openai-completions
         baseURL: https://api.aiohub.org/v1
+        maxRequestImages: 28
+        imageOffloadCountQuantum: 6
         reasoning: low
         models:
           - id: deepseek-v4.1-flash-1017
@@ -77,6 +93,8 @@
         apiKeyEnv: AIOHUB_API_KEY
         api: anthropic-messages
         baseURL: https://api.aiohub.org
+        maxRequestImages: 28
+        imageOffloadCountQuantum: 6
         reasoning: medium
         compat:
           # pi-ai 的内置目录还不认识 claude-sonnet-5-5，手动声明它要用 adaptive thinking + effort
@@ -106,6 +124,8 @@
         apiKeyEnv: AIOHUB_API_KEY
         api: anthropic-messages
         baseURL: https://api.aiohub.org
+        maxRequestImages: 28
+        imageOffloadCountQuantum: 6
         reasoning: high
         compat:
           forceAdaptiveThinking: true
@@ -133,6 +153,8 @@
         apiKeyEnv: AIOHUB_API_KEY
         api: anthropic-messages
         baseURL: https://api.aiohub.org
+        maxRequestImages: 28
+        imageOffloadCountQuantum: 6
         reasoning: high
         compat:
           forceAdaptiveThinking: true
@@ -159,6 +181,8 @@
         apiKeyEnv: CLOUDFLARE_API_TOKEN
         api: openai-completions
         baseURL: https://api.cloudflare.com/client/v4/accounts/<CLOUDFLARE_ACCOUNT_ID>/ai/v1
+        maxRequestImages: 28
+        imageOffloadCountQuantum: 6
         reasoning: high
         models:
           - id: '@cf/deepseek-ai/deepseek-v4.1-flash-1017'
@@ -174,7 +198,7 @@
 
 # 去掉 DSH 默认塞进每个会话系统提示的“编程助手”内容，它们会让 QQ 里的角色自称 DeepSeek、
 # 或者以为自己在写代码。注意：这两条会整体覆盖原条目的 config，所以把原来的字段也抄过来了
-# （来源：dsh --profile web --dump-config，DSH 0.2.0-rc.2）。升级 DSH 后要重新核对。
+# （来源：dsh --profile web --dump-config，DSH 0.2.2-rc.1；0.2.2 起 trustedHosts 挪到了 connection 条目、web-runtime 多了 publicUrl）。升级 DSH 后要重新核对。
 # 1) 去掉开头的 "You are an AI agent powered by DeepSeek Harness."
 - id: system-prompt
   config:
@@ -188,5 +212,5 @@
   config:
     openBrowser: !!js ctx.webStartup.openBrowser
     printUrl: true
+    publicUrl: !!js ctx.webStartup.publicUrl
     surfaceContext: false
-    trustedHosts: !!js ctx.webStartup.trustedHosts

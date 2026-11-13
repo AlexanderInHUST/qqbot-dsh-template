@@ -36,7 +36,8 @@ if [ "$os" = Linux ]; then
   if [ "$(id -u)" = 1000 ] && [ "$(id -g)" = 1000 ]; then ok "当前用户 uid/gid 1000"
   else warn "当前用户 uid=$(id -u) gid=$(id -g)，不是 1000：需要 sudo chown 1000:1000 config/qq-bridge/config.json"; fi
 fi
-crlf="$(grep -rlI "$(printf '\r')" control egress extras sandbox scripts config roles docker-compose.yml 2>/dev/null || true)"
+# .hta 必须是 CRLF（桌面的鱼妹开关，mshta 读的），不查
+crlf="$(grep -rlI --exclude='*.hta' "$(printf '\r')" control egress extras sandbox scripts config roles docker-compose.yml 2>/dev/null || true)"
 if [ -z "$crlf" ]; then ok "没有 CRLF 换行"
 elif [ "$FIX" = --fix ]; then
   for f in $crlf; do sed -i.bak 's/\r$//' "$f" && rm -f "$f.bak"; done; ok "已把这些文件改回 LF：$(echo $crlf)"

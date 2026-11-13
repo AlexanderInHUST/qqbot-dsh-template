@@ -22,11 +22,14 @@ import * as presetPrompt from '../src/preset-prompt.js';
 import * as stateAcl from '../src/state-acl.mjs';
 import * as freeTimeLib from '../src/free-time.js';
 import * as roleCardLib from '../src/role-card.js';
+import * as stateBlocksLib from '../src/state-blocks.js';
+import * as privacyLib from '../src/privacy-policy.js';
 import * as replyGateLib from '../src/reply-gate.js';
 import * as innerLifeLib from '../src/inner-life.js';
 import { sheetNote } from '../src/gif-frames.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 import { createScheduler as realCreateScheduler } from '../src/scheduler.js';
+import { clockNow, clockPinned, makeClockDate } from './lib/test-clock.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 export async function bridgeHarness({ config = {}, savedState, files = {}, globals = {} } = {}) {
@@ -37,6 +40,8 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     dsh: { authToken: 'fixture-only' }, ownerQQ: 123,
     allow: { private: ['123'], groups: ['456'] }, consolePort: 0,
     consoleToken: 'fixture-console-token', slang: { enabled: false }, ...config,
+    // 成长档案（src/app/growth.js）启动时会去 extras 取一次，别的测试数 fetch 次数时会多出来；要测它的自己开
+    socialV2: { ...(config.socialV2 ?? {}), growth: { enabled: false, ...(config.socialV2?.growth ?? {}) } },
   }));
   if (savedState) fs.writeFileSync(path.join(temp, 'state/sessions.json'), JSON.stringify(savedState));
   // 额外状态文件（用于测试"启动时读到损坏/旧版文件"这类路径）。
@@ -135,7 +140,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ensureSession, resolvePresetName, deliverPrompt, drainPromptQueue, sendToQQ, handleIncoming, cfg, state,
     api, promptQueues, refreshMode, modeAllowed, trackTurnEvent, collectors, pendingWakeKeys,
     extractMediaFromSegments, segmentsToText, bot, v2TurnStartAt, turnLeaseNoted, TURN_BUSY_LEASE_MS,
-    settingFromDshNamespace, handlePokeNotice, pokeWakeOkV2, sessionContextTokens, idleCompactTimers, log,
+    settingFromDshNamespace, handlePokeNotice, pokeWakeOkV2, sessionContextTokens, log,
     getMode() { return currentMode; },
     setSelfIdentity(display, id) {
       selfDisplayName = String(display ?? '');
@@ -163,7 +168,8 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     setTimeout: (fn, ms) => { const timer = setTimeout(fn, ms); timers.add(timer); return timer; },
     clearTimeout, setInterval: () => ({ unref() {} }), clearInterval: () => {},
     // 定时任务照常登记（firstDelayMs 0 的照样马上跑一次），但心跳不走：要跑哪一拍，测试里自己调 scheduler.tick()
-    createScheduler: (opts) => { schedulerRef = realCreateScheduler({ ...opts, heartbeatMs: 2 ** 31 - 1 }); return schedulerRef; },
+    // 钉了测试钟（scripts/lib/test-clock.mjs 的 pinClock）就跟着它走
+    createScheduler: (opts) => { schedulerRef = realCreateScheduler({ ...opts, now: clockNow, heartbeatMs: 2 ** 31 - 1 }); return schedulerRef; },
     NodeApiClient: class { constructor() { return api; } },
     SnowLumaWebSocketClient: FakeBot, text: (s) => s,
     discoverDshLaunchToken: () => '', unwrap, createTurnCollector,
@@ -173,12 +179,16 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ...freeTimeLib, freeTimeActivities: freeTimeLib.activities,
     // qqbot_agent：人格卡处理（每次唤醒都会同步一次 state/role-card-v2.md）
     ...roleCardLib,
+    // 二代状态分块存盘（src/state-blocks.js）
+    ...stateBlocksLib,
+    // 家里 / 外面的分寸（src/privacy-policy.js）
+    ...privacyLib,
     // qqbot_agent：群聊回复门控
     ...replyGateLib,
     // qqbot_agent：心情、生活、主动找人的纯函数
     ...innerLifeLib,
     // qqbot_agent：动图拼宫格要 spawn ffmpeg，测试里当静态图处理
-    animatedSheet: async () => null, sheetNote,
+    animatedSheet: async () => null, toJpeg: async () => null, sheetNote,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的
     // cleanupTemp / processAudioVolume 桩）。桩成成功，让 hardenStateDirAcl 走正常分支。
     hardenDir: () => ({ ok: true, detail: 'stub' }),
@@ -201,6 +211,8 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     cleanupTemp: () => {},
     ...globals,
   });
+  // 钉了测试钟：vm 里的 Date 也换成跟着钟走的（用 vm 自己的 Date 做底，instanceof 照旧）
+  if (clockPinned()) context.Date = makeClockDate(vm.runInContext('Date', context), clockNow);
   // Execute the pure model view in the bridge realm. Its plain-object checks
   // should see the same prototypes as real bridge messages, just as in Node.
   const modelViewSource = fs.readFileSync(path.join(root, 'src/qq-model-view.js'), 'utf8').replace(/^export /gm, '');

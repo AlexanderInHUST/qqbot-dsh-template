@@ -223,7 +223,6 @@ export function createVoice(app) {
     const sendPath = processed.path;
 
     const assertSendAllowed = guard ? captureSendGuard(key) : null;
-    const [kind, id] = key.split(':');
     const recordSegment = { type: 'record', data: { file: sendPath } };
     let resolveSend;
     let rejectSend;
@@ -233,26 +232,8 @@ export function createVoice(app) {
         if (assertSendAllowed) assertSendAllowed();
         // 语音条比图片大、要过一次 SILK 转码，给 60s 预算（文本/图片共用同一 sendChain，
         // 所以这条语音发完之前后面的文本会自然排队，不会插队到语音前面）。
-        const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
-        const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
-        const params = kind === 'private'
-          ? { user_id: Number(id), message: [recordSegment] }
-          : { group_id: Number(id), message: [recordSegment] };
-        const res = await fetch(`${httpUrl}/${action}`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
-          },
-          body: JSON.stringify(params),
-          signal: AbortSignal.timeout(60000)
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
-          const hint = res.status === 426 ? '（HTTP 426：snowluma.httpUrl 可能指向了 WebSocket 端口）' : '';
-          throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
-        }
-        resolveSend(body.data);
+        // guard=false 是控制台操作者手动发的
+        resolveSend(await app.qqOut(key, [recordSegment], { origin: guard ? 'her' : 'console', timeoutMs: 60000 }));
       } catch (error) {
         rejectSend(error);
       }
@@ -328,7 +309,7 @@ export function createVoice(app) {
       const record = segments.find((s) => s?.type === 'record');
       if (!record) return null;
       // 注意：只回报「确认成功 + 时长」，**不回传 file/url**。
-      // 私聊消息里 get_msg 会把源文件路径塞进 url（如 D:\...\audio\xxx.mp3），
+      // 私聊消息里 get_msg 会把源文件路径塞进 url（如 <盘符>:\…\audio\xxx.mp3），
       // 回给 AI 就等于把本机路径写进模型上下文（也会被敏感信息审计拦）。
       return {
         confirmed: true,

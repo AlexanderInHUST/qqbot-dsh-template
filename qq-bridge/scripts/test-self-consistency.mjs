@@ -6,7 +6,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
+import { pinClock } from './lib/test-clock.mjs';
 
+// 钉在下午两点：clock() 算的钟点不会跨过 0 点（以前 0 点前后跑会误报）
+pinClock('14:00');
 const clock = (minutesFromNow) => {
   const d = new Date(Date.now() + minutesFromNow * 60000);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -190,6 +193,21 @@ test('“我这就去画”：认出来，提示她用 qq_go_play；说过去、
   h.cfg.socialV2.promiseHint = { goDo: false };
   await busy('private:42');
   assert.equal(h.promiseHintV2('private:42', ['我这就去画']), null, 'goDo:false 关掉');
+}));
+test('“你看这个”只发了字：提示她接着发截图；刚发过图、有画在画、不是指着东西说的都不提；同一处 10 分钟一次', () => fixture({}, {}, async ({ h }) => {
+  const hint = h.showHintV2('group:456', ['爸爸你看这个，小肥鱼为了打游戏一直截图看画面', '弹幕全在刷']);
+  assert.match(hint, /qq_send_screenshot\(\)/);
+  assert.equal(h.showHintV2('group:456', ['你们看这张']), null, '10 分钟一次');
+  for (const t of ['我换了张哈勃拍的给你看', '我在看这个视频', '今晚就消给你看', '这个好好笑', '你看着办'])
+    assert.equal(h.showHintV2('private:42', [t]), null, t);
+  assert.match(h.showHintV2('private:42', ['哈哈快看这只猫']), /看不到你说的是哪个/);
+  const st = h.getSocialV2State('group:789');
+  st.recentMessages.push({ isSelf: true, text: '[截图:Tetris]', media: [{ kind: 'image' }], time: Date.now() - 60000 });
+  assert.equal(h.showHintV2('group:789', ['你看这个']), null, '刚发过截图');
+  h.socialV2.drawLog = [{ key: 'private:43', at: Date.now() - 60000, ok: null }];
+  assert.equal(h.showHintV2('private:43', ['给你看看这张']), null, '画还在画');
+  h.cfg.socialV2.promiseHint = { show: false };
+  assert.equal(h.showHintV2('group:999', ['你看这个']), null, 'show:false 关掉');
 }));
 test('等自己不行', () => fixture({}, {}, async ({ h }) => {
   h.setSelfIdentity('鱼妹', '19811729');

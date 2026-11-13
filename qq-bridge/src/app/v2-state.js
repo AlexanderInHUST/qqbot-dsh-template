@@ -1,17 +1,19 @@
-// 二代会话状态：每个会话的状态、唤醒配置默认值、读写 state/social-v2.json
+// 二代会话状态：每个会话的状态、唤醒配置默认值、读写 state/social-v2/ 下的分块（以前是一整份 state/social-v2.json，见 src/state-blocks.js）
 // 2026-10-24 从 bridge.js 的 main() 里拆出来，代码原样搬过来的；用到的别处的东西都从 app 拿（见 bridge.js 里“装配拆出去的模块”）。
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import { sanitizeForwardId } from '../forward.js';
+import { homeGroupKeys, noReachOut } from '../privacy-policy.js';
 import { DynamicReplyGate } from '../reply-gate.js';
+import { createBlockWriter, readSocialV2State, socialV2Stamp } from '../state-blocks.js';
 
 export function createV2State(app) {
   const {
-    PLAY_KEY, SOCIAL_V2_FILE, atomicWriteJson, canonicalV2Key, cfg, log, readJsonSafe,
+    PLAY_KEY, SOCIAL_V2_FILE, canonicalV2Key, cfg, log,
     rememberAgentToken, sendToQQ
   } = app;
+  const blockWriter = createBlockWriter(SOCIAL_V2_FILE);
   // 别的模块里的，等都装好了在 link() 里拿
-  let PLAY_LOG_MAX, READ_PAGES_MAX, backfillPlaySessionsV2, loadLifeV2, scheduleProactiveCheckV2,
+  let PLAY_LOG_MAX, READ_PAGES_MAX, backfillPlaySessionsV2, cancelSleepTimerV2, loadLifeV2, scheduleProactiveCheckV2,
     setupSleepTimerV2;
 
   // ── 二代仿真模式（reserved2）运行时状态与唤醒配置 ────────────────────────
@@ -19,9 +21,9 @@ export function createV2State(app) {
     conversations: new Map(), // key -> state
     paused: false, // 控制台可暂停整个二代 AI 活动（停止唤醒/等待）
     freeTimeHistory: [], // qqbot_agent：最近几次自由时间各玩了什么 [{ at, key, kinds: { 活动id: 样数 } }]
-    watchedVideos: [], // qqbot_agent：最近用 bili_watch 看过的视频 [{ bvid, title, at }]，自由时间提示里列出来免得重看
     readPages: [], // qqbot_agent：自由时间读过的文章、帖子 [{ page, title, at }]，再打开就提醒她看过了
     selfAvatar: null, // qqbot_agent：她自己的 QQ 头像 { hash, desc, at }，desc 写进每次唤醒的身份行
+    avatarDescs: {}, // qqbot_agent：别人的 QQ 头像描述 { QQ号: { hash, desc, at } }，画画、做视频时照着画，见 cast.js
     proactiveNextAt: 0, // qqbot_agent：下次自由时间检查的时间，存盘，免得每次重启都重新等 1~2 小时
     playShares: [], // qqbot_agent：自由时间往聊天里分享的记录 [{ key, at, lastAt, asked? }]，见 playShareGateV2
     // qqbot_agent：她“现在怎么样”的全局状态（所有会话共用一份，见 selfNowBlockV2）
@@ -39,8 +41,13 @@ export function createV2State(app) {
     reminders: [], // qqbot_agent：她用 qq_remind_me 记的“待会儿要做的事” [{ id, key, note, at, due, firedAt?, shownAt? }]，见 reminderTickV2
     playSessions: [], // qqbot_agent：每次自由时间的起止 [{ start, end, reason }]，最近 36 小时，【你现在】里列“今天上电脑玩了几回”
     selfClaims: [], // qqbot_agent：她在各处说过的自己的事 [{ at, key, text }]（selfCheck 从她发的话里抽的），见 selfClaimsLineV2
-    tellNotes: [], // qqbot_agent：别的窗口捎来、还没给那边看过的话 [{ id, from, to, note, at }]，见 tell-myself.js
+    notes: [], // qqbot_agent：留给某个窗口、还没给她看过的话 [{ kind: 'tell'|'draw'|'video', id, to, at, ...}]（捎话带 from、note；画画、做视频的 id 是记录里的），见 jobs.js
     playHold: null, // qqbot_agent：答应了先不玩 { from, at, until, note? }，到 until 前不去自由时间，见 playHoldV2
+    drawLog: [], // qqbot_agent：qq_draw 画过的 [{ id, at, key, from, prompt, caption?, model?, file?, messageId?, ok（null = 还在画）, error?, refused? }]，算每天画了几张，见 draw.js
+    videoLog: [], // qqbot_agent：qq_make_video 做过的 [{ id, at, startedAt?, key, from, prompt, seconds, caption?, taskId?, model?, file?（抽帧拼图）, messageId?, ok, error?, refused? }]，见 video.js
+    aliveAt: 0, // qqbot_agent：bridge 最后一次活着的时间（每分钟记一次、存盘时也记），重启时拿它算关了多久，见 away.js
+    away: null, // qqbot_agent：最近一次不在 { from, to, why: 'game'|'sleep'|'unknown', shown: [给哪些会话说过【你刚回来】] }，见 away.js
+    gameRest: null, // qqbot_agent：陪着打了半小时游戏，歇到 until { at, until }，见 away.js
   };
   const REMINDERS_MAX = 60;
   const PLAY_SESSIONS_MAX = 30;
@@ -161,16 +168,24 @@ export function createV2State(app) {
 
   // qqbot_agent：系统提示（出错、已停止、回复被拦截、消息未被接受……）只私聊发给 ownerQQ，
   // 不发到群里或别人的私聊；不是主人自己的会话时注明是哪个会话。同一条 10 分钟内只发一次，免得刷屏。
+  // 2026-10-28：主人的私聊不在白名单里（爸爸说以后不私聊、有事都在小群说）时，改发到家里的第一个群（homeGroups[0]）。
   const ownerNoticeSentAt = new Map();
-  async function notifyOwnerOnly(key, text) {
+  function ownerNoticeKey() {
     const owner = cfg.ownerQQ;
-    if (!owner) { log(`[notice] 没有设置 ownerQQ，丢弃系统提示 (${key})：${text}`); return; }
+    if (!owner) return '';
     const ownerKey = `private:${owner}`;
+    if (app.isSessionAllowedInCurrentMode(ownerKey) && !noReachOut(cfg, ownerKey)) return ownerKey;
+    const home = homeGroupKeys(cfg).find((k) => app.isSessionAllowedInCurrentMode(k));
+    return home || ownerKey;
+  }
+  async function notifyOwnerOnly(key, text) {
+    const ownerKey = ownerNoticeKey();
+    if (!ownerKey) { log(`[notice] 没有设置 ownerQQ，丢弃系统提示 (${key})：${text}`); return; }
     const body = key === ownerKey ? text : `${text}\n（来自会话 ${key}）`;
     const last = ownerNoticeSentAt.get(body) || 0;
     if (Date.now() - last < 10 * 60 * 1000) return;
     ownerNoticeSentAt.set(body, Date.now());
-    try { await sendToQQ(ownerKey, body); } catch (error) { log(`[notice] 发给 ownerQQ 失败：${error?.message ?? error}`); }
+    try { await sendToQQ(ownerKey, body, 'notice'); } catch (error) { log(`[notice] 发给 ownerQQ 失败：${error?.message ?? error}`); }
   }
 
   function computeWakeSafetyV2(wc) {
@@ -201,10 +216,7 @@ export function createV2State(app) {
       (Array.isArray(tr.keywords) && tr.keywords.length > 0) || tr.question || Number(tr.probability) > 0 ||
       tr.speakerIds.length > 0 || timed;
     if (!wakeable) {
-      if (st.sleepTimer) {
-        clearTimeout(st.sleepTimer);
-        st.sleepTimer = null;
-      }
+      cancelSleepTimerV2?.(key);
       st.wakeConfig = defaultWakeConfigV2();
       if (!opts.skipSave) saveSocialV2State();
       if (key) setupSleepTimerV2(key);
@@ -236,9 +248,6 @@ export function createV2State(app) {
         sendTimes: [],
         stickerCollectTimes: [],
         pendingWakeTimer: null,
-        sleepTimer: null,
-        proactiveTimer: null,
-        rateLimitRetryTimer: null,
         lastIncomingAt: 0,
         lastUnreadSeq: 0,
         lastReadThroughSeq: 0,
@@ -262,20 +271,15 @@ export function createV2State(app) {
       // 内存态就是旧的 —— 再写回去等于把它那份更新的状态覆盖掉。
       // 这不是假想：日志里出现过两个桥接实例同时启动，第二个实例在加载后立刻回写，
       // 把第一个实例刚更新的读水位/唤醒时间/转发 id 全部退回旧值。
-      const fileStamp = (() => {
-        try {
-          const s = fs.statSync(SOCIAL_V2_FILE);
-          return `${s.size}:${s.mtimeMs}`;
-        } catch {
-          return null;
-        }
-      })();
-      const raw = readJsonSafe(SOCIAL_V2_FILE, null);
+      // 2026-11-08 起读的是分块（state/social-v2/），拼成以前整份的样子，下面的校验照旧。
+      const fileStamp = socialV2Stamp(SOCIAL_V2_FILE);
+      const { raw, source, notes: loadNotes } = readSocialV2State(SOCIAL_V2_FILE);
+      for (const n of loadNotes) log(`[分块存盘] ${n}`);
       socialV2.paused = raw?.paused === true;
       socialV2.freeTimeHistory = Array.isArray(raw?.freeTimeHistory) ? raw.freeTimeHistory.filter((h) => h && typeof h.kinds === 'object').slice(-20) : [];
-      socialV2.watchedVideos = Array.isArray(raw?.watchedVideos) ? raw.watchedVideos.filter((v) => v && /^BV[0-9A-Za-z]{10}$/.test(String(v.bvid))).slice(-50) : [];
       socialV2.readPages = Array.isArray(raw?.readPages) ? raw.readPages.filter((p) => p && typeof p.page === 'string' && Number.isFinite(Number(p.at))).slice(-READ_PAGES_MAX) : [];
       socialV2.selfAvatar = raw?.selfAvatar && typeof raw.selfAvatar.hash === 'string' ? raw.selfAvatar : null;
+      socialV2.avatarDescs = raw?.avatarDescs && typeof raw.avatarDescs === 'object' ? Object.fromEntries(Object.entries(raw.avatarDescs).filter(([id, v]) => /^\d{5,12}$/.test(id) && v && typeof v.desc === 'string' && typeof v.hash === 'string').slice(-300)) : {};
       socialV2.playShares = Array.isArray(raw?.playShares) ? raw.playShares.filter((x) => x && typeof x.key === 'string' && Number.isFinite(Number(x.at))).slice(-100) : [];
       socialV2.mood = raw?.mood && typeof raw.mood.text === 'string' && Number.isFinite(Number(raw.mood.at)) ? { text: raw.mood.text.slice(0, 20), why: String(raw.mood.why || '').slice(0, 60), at: Number(raw.mood.at), key: String(raw.mood.key || ''), source: raw.mood.source === 'auto' ? 'auto' : 'self', ...(raw.mood.source === 'auto' ? { valence: Number(raw.mood.valence) || 0, arousal: Number(raw.mood.arousal) || 0 } : {}) } : null;
       socialV2.life = loadLifeV2(raw?.life);
@@ -290,8 +294,22 @@ export function createV2State(app) {
         ? raw.playSessions.filter((x) => x && Number(x.start) > 0).map((x) => ({ start: Number(x.start), end: Number(x.end) || 0, reason: String(x.reason || '') })).slice(-PLAY_SESSIONS_MAX)
         : backfillPlaySessionsV2(); // 升级前没记：从 freeTimeHistory 和 playLog 推一份
       socialV2.selfClaims = Array.isArray(raw?.selfClaims) ? raw.selfClaims.filter((x) => x && typeof x.text === 'string' && Number(x.at) > 0).slice(-SELF_CLAIMS_MAX) : [];
-      socialV2.tellNotes = Array.isArray(raw?.tellNotes) ? raw.tellNotes.filter((x) => x && typeof x.to === 'string' && typeof x.note === 'string' && Number(x.at) > 0).slice(-30) : [];
+      socialV2.drawLog = Array.isArray(raw?.drawLog) ? raw.drawLog.filter((x) => x && typeof x.key === 'string' && Number(x.at) > 0).slice(-300) : [];
+      socialV2.videoLog = Array.isArray(raw?.videoLog) ? raw.videoLog.filter((x) => x && typeof x.key === 'string' && Number(x.at) > 0).slice(-300) : [];
+      // 留话：2026-11-08 以前是 tellNotes / drawNotes / videoNotes 三份，读进来并成一份
+      const oldNotes = [
+        ...(Array.isArray(raw?.tellNotes) ? raw.tellNotes.map((x) => ({ kind: 'tell', ...x })) : []),
+        ...(Array.isArray(raw?.drawNotes) ? raw.drawNotes.map((x) => ({ kind: 'draw', ...x })) : []),
+        ...(Array.isArray(raw?.videoNotes) ? raw.videoNotes.map((x) => ({ kind: 'video', ...x })) : []),
+      ];
+      socialV2.notes = [...(Array.isArray(raw?.notes) ? raw.notes : []), ...oldNotes]
+        .filter((x) => x && typeof x.kind === 'string' && typeof x.id === 'string' && typeof x.to === 'string' && Number(x.at) > 0
+          && (x.kind !== 'tell' || typeof x.note === 'string'))
+        .sort((a, b) => Number(a.at) - Number(b.at)).slice(-60);
       socialV2.playHold = raw?.playHold && Number(raw.playHold.until) > Date.now() ? { from: String(raw.playHold.from || ''), at: Number(raw.playHold.at) || 0, until: Number(raw.playHold.until), ...(raw.playHold.note ? { note: String(raw.playHold.note).slice(0, 150) } : {}) } : null;
+      socialV2.aliveAt = Number(raw?.aliveAt) > 0 && Number(raw.aliveAt) <= Date.now() ? Number(raw.aliveAt) : 0;
+      socialV2.away = raw?.away && Number(raw.away.to) > 0 ? { from: Number(raw.away.from) || 0, to: Number(raw.away.to), why: String(raw.away.why || 'unknown'), shown: Array.isArray(raw.away.shown) ? raw.away.shown.map(String).slice(-30) : [] } : null;
+      socialV2.gameRest = raw?.gameRest && Number(raw.gameRest.until) > Date.now() ? { at: Number(raw.gameRest.at) || 0, until: Number(raw.gameRest.until) } : null;
       socialV2.lastPlaySay = raw?.lastPlaySay && typeof raw.lastPlaySay.text === 'string' ? { at: Number(raw.lastPlaySay.at) || 0, text: raw.lastPlaySay.text.slice(0, 300) } : null;
       socialV2.replyGates = Object.create(null);
       for (const [k, g] of Object.entries(raw?.replyGates && typeof raw.replyGates === 'object' ? raw.replyGates : {})) {
@@ -329,8 +347,6 @@ export function createV2State(app) {
             sendTimes: Array.isArray(val.sendTimes) ? val.sendTimes : [],
             stickerCollectTimes: Array.isArray(val.stickerCollectTimes) ? val.stickerCollectTimes : [],
             pendingWakeTimer: null,
-            sleepTimer: null,
-            proactiveTimer: null,
             lastIncomingAt: Number(val.lastIncomingAt) || 0,
             lastUnreadSeq: Number(val.lastUnreadSeq) || 0,
             lastReadThroughSeq: Number.isSafeInteger(val.lastReadThroughSeq) && val.lastReadThroughSeq >= 0
@@ -382,18 +398,13 @@ export function createV2State(app) {
         // 加载阶段统一落盘一次，避免 ensureWakeableV2 中途写盘覆盖未加载会话。
         // 但只有在文件仍是「我们读到的那一份」时才写：否则说明有另一个进程写过它，
         // 我们手里的内存态已经过时，回写会静默吞掉对方的新数据。
-        const nowStamp = (() => {
-          try {
-            const s = fs.statSync(SOCIAL_V2_FILE);
-            return `${s.size}:${s.mtimeMs}`;
-          } catch {
-            return null;
-          }
-        })();
+        const nowStamp = socialV2Stamp(SOCIAL_V2_FILE);
         if (fileStamp !== null && nowStamp !== null && fileStamp !== nowStamp) {
-          log('⚠️ state/social-v2.json 在本次加载期间被其它进程改写，跳过回写以免覆盖更新的状态（是否误开了第二个桥接实例？）');
-        } else {
-          flushSocialV2State();
+          log('⚠️ state/social-v2 在本次加载期间被其它进程改写，跳过回写以免覆盖更新的状态（是否误开了第二个桥接实例？）');
+        } else if (flushSocialV2State() && source === 'legacy') {
+          // 分块都写好了才把旧的整份改名，写失败下次启动还从它迁
+          try { log(`[分块存盘] 迁完了，旧的整份改名成 ${blockWriter.retireLegacy()?.split('/').pop()}`); }
+          catch (error) { log('[分块存盘] 旧的 social-v2.json 改名失败:', error?.message ?? error); }
         }
       }
     } catch (error) {
@@ -417,7 +428,7 @@ export function createV2State(app) {
   function flushSocialV2State() {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
     try {
-      const obj = { paused: socialV2.paused, freeTimeHistory: socialV2.freeTimeHistory.slice(-20), watchedVideos: socialV2.watchedVideos, readPages: (socialV2.readPages || []).slice(-READ_PAGES_MAX), selfAvatar: socialV2.selfAvatar, proactiveNextAt: socialV2.proactiveNextAt, playShares: (socialV2.playShares || []).slice(-100), mood: socialV2.mood, sleptAt: socialV2.sleptAt || 0, sleptKey: socialV2.sleptKey || '', upLateAt: socialV2.upLateAt || 0, playLog: (socialV2.playLog || []).slice(-PLAY_LOG_MAX), playStartedAt: socialV2.playStartedAt || 0, playEndedAt: socialV2.playEndedAt || 0, lastPlaySay: socialV2.lastPlaySay, replyGates: socialV2.replyGates, life: socialV2.life, reminders: (socialV2.reminders || []).slice(-REMINDERS_MAX), playSessions: (socialV2.playSessions || []).slice(-PLAY_SESSIONS_MAX), selfClaims: (socialV2.selfClaims || []).slice(-SELF_CLAIMS_MAX), tellNotes: (socialV2.tellNotes || []).slice(-30), playHold: socialV2.playHold || null, conversations: Object.create(null) };
+      const obj = { paused: socialV2.paused, freeTimeHistory: socialV2.freeTimeHistory.slice(-20), readPages: (socialV2.readPages || []).slice(-READ_PAGES_MAX), selfAvatar: socialV2.selfAvatar, avatarDescs: socialV2.avatarDescs || {}, proactiveNextAt: socialV2.proactiveNextAt, playShares: (socialV2.playShares || []).slice(-100), mood: socialV2.mood, sleptAt: socialV2.sleptAt || 0, sleptKey: socialV2.sleptKey || '', upLateAt: socialV2.upLateAt || 0, playLog: (socialV2.playLog || []).slice(-PLAY_LOG_MAX), playStartedAt: socialV2.playStartedAt || 0, playEndedAt: socialV2.playEndedAt || 0, lastPlaySay: socialV2.lastPlaySay, replyGates: socialV2.replyGates, life: socialV2.life, reminders: (socialV2.reminders || []).slice(-REMINDERS_MAX), playSessions: (socialV2.playSessions || []).slice(-PLAY_SESSIONS_MAX), selfClaims: (socialV2.selfClaims || []).slice(-SELF_CLAIMS_MAX), notes: (socialV2.notes || []).slice(-60), playHold: socialV2.playHold || null, drawLog: (socialV2.drawLog || []).slice(-300), videoLog: (socialV2.videoLog || []).slice(-300), aliveAt: Date.now(), away: socialV2.away || null, gameRest: socialV2.gameRest || null, conversations: Object.create(null) };
       for (const [key, st] of socialV2.conversations) {
         obj.conversations[key] = {
           wakeConfig: st.wakeConfig,
@@ -440,12 +451,17 @@ export function createV2State(app) {
           seenForwardIds: Array.from(seenForwardIds.get(key) || []).slice(-1000)
         };
       }
-      atomicWriteJson(SOCIAL_V2_FILE, obj);
+      // 只写内容变了的块（见 src/state-blocks.js）
+      blockWriter.write(obj);
+      return true;
     } catch (error) {
       log('保存 socialV2 状态失败:', error?.message ?? error);
+      return false;
     }
-  }function emptyLifeV2() {
-    return { moodAppraisedAt: {}, moodLog: [], interest: {}, initiates: [], initiateNextAt: 0, planDate: '', planTriedAt: 0, plan: null, planCheckedAt: {}, diaryDate: '', diaryTriedAt: 0, diary: null, threads: [], threadsAt: 0, dayPlay: [] };
+  }
+
+function emptyLifeV2() {
+    return { moodAppraisedAt: {}, moodLog: [], interest: {}, initiates: [], initiateNextAt: 0, planDate: '', planTriedAt: 0, planCheckedAt: {}, diaryDate: '', diaryTriedAt: 0, dayPlay: [] };
   }
 
   return {
@@ -465,6 +481,7 @@ export function createV2State(app) {
       messageMediaStore,
       normalizeSpeakerIdsV2,
       notifyOwnerOnly,
+      ownerNoticeKey,
       pickWakeTriggersV2,
       refreshAllDefaultWakeConfigsV2,
       saveSocialV2State,
@@ -476,7 +493,7 @@ export function createV2State(app) {
     },
     link() {
       ({
-        PLAY_LOG_MAX, READ_PAGES_MAX, backfillPlaySessionsV2, loadLifeV2, scheduleProactiveCheckV2,
+        PLAY_LOG_MAX, READ_PAGES_MAX, backfillPlaySessionsV2, cancelSleepTimerV2, loadLifeV2, scheduleProactiveCheckV2,
         setupSleepTimerV2
       } = app);
     },

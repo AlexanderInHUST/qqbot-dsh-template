@@ -5,16 +5,18 @@
 // stopPlay：电脑那边马上收尾，一段时间内不去玩（自由时间检查跳过、qq_go_play 拒、play 不往聊天里分享）。
 // 只能从私聊和家里的群发（主人：不要被大群污染了），而且要主人 5 分钟内在那里说过话。
 import { truncateText } from '../md-to-plain.js';
+import { isHomeChat, noReachOut } from '../privacy-policy.js';
 import { defang } from '../qq-model-view.js';
 import { SENSITIVE_RE } from '../sensitive.js';
 
 export function createTellMyself(app) {
   const {
-    PLAY_KEY, api, cfg, isSessionAllowedInCurrentMode, log
+    PLAY_KEY, api, appendActivity, canonicalV2Key, cfg, isSessionAllowedInCurrentMode, log, shouldBlockSilentReply
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
-  let convLabelV2, getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2,
-    saveSocialV2State, socialV2, turnRunningV2, whenV2;
+  let bubbleCapV2, computeGapsV2, convLabelV2, getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2,
+    leaveNoteV2, markNotesShownV2, mergeBubblesV2, noteNotesShownV2, notesOfV2, recordSentMessagesV2, saveSocialV2State,
+    sendMessagesV2, socialV2, tellWindowV2, turnRunningV2, whenV2;
 
   const TELL_NOTE_MAX_CHARS = 150;
   const TELL_NOTES_PER_KEY = 3;
@@ -36,7 +38,7 @@ export function createTellMyself(app) {
   }
   // 能发的地方：私聊、家里的群（大群、play 都不行）
   function tellSourceOkV2(key) {
-    return /^(private|group):\d+$/.test(String(key ?? '')) && !isOutsideGroupKeyV2(key);
+    return isHomeChat(cfg, key);
   }
   // 给 to 那边看的“在哪答应的”：家里以外的群只写“别处”
   function tellFromLabelV2(from, to) {
@@ -93,7 +95,7 @@ export function createTellMyself(app) {
     saveSocialV2State();
     const sessionId = app.state.sessions?.[PLAY_KEY];
     if (!sessionId || !isConversationBusyV2(PLAY_KEY, st)) return 'idle';
-    const markRead = `mcp__snowluma__qq_mark_read(key="${PLAY_KEY}", token=${st.agentToken})`;
+    const markRead = 'qq_mark_read()';
     const text = `【先不玩了】你 ${whenV2(now)} 在${convLabelV2(from, socialV2.conversations.get(from))}答应了先不玩了${note ? `：${defang(note)}` : ''}。手上的马上停下，别再往聊天里发东西（聊天那边的你会跟大家说），关掉多余的标签页，调用 ${markRead}。`;
     try {
       const accepted = await api.sessions.prompt({ sessionId, mode: 'steer', content: [{ type: 'text', text }] });
@@ -105,44 +107,26 @@ export function createTellMyself(app) {
   }
 
   // ── 捎话 ─────────────────────────────────────────────────
+  // 留话存在 socialV2.notes（kind 'tell'，见 jobs.js），每处最多 TELL_NOTES_PER_KEY 条、留 keepHours
   let tellSeq = 0;
-  const tellPromptIds = new Map(); // 最近一次拼进唤醒提示的捎话 id，投递成功后删掉（和 reminderPromptIds 一个道理）
   function tellNotesOfV2(key, now = Date.now()) {
-    const keepMs = tellCfgV2().keepMs;
-    return (Array.isArray(socialV2.tellNotes) ? socialV2.tellNotes : []).filter((n) => n.to === key && now - Number(n.at) < keepMs);
+    return notesOfV2(key, 'tell', now);
   }
   // 捎给 to：那边正聊着就插一句，插不进去就记着等那边下次被叫醒
   async function deliverTellV2(from, to, note, now) {
     const st = getSocialV2State(to);
-    const sessionId = app.state.sessions?.[to];
     const fromLabel = tellFromLabelV2(from, to);
-    if (sessionId && turnRunningV2(to)) {
-      const tail = to === PLAY_KEY
-        ? '照着做，不用回话。'
-        : '照着做。这边要是得跟人说一声，就像自己想起来的那样自然地说，别提是谁让的、在哪答应的，那边聊的内容也别搬过来。';
-      try {
-        const accepted = await api.sessions.prompt({ sessionId, mode: 'steer', content: [{ type: 'text', text: `【捎给自己的话】${to}（令牌 ${st.agentToken}）你 ${whenV2(now)} 在${fromLabel}答应了：${defang(note)}\n${tail}` }] });
-        if (accepted?.result?.ok) return 'steered';
-      } catch (error) {
-        log(`[捎话] ${to} 插话失败，记着等下次：${error?.message ?? error}`);
-      }
-    }
-    if (!Array.isArray(socialV2.tellNotes)) socialV2.tellNotes = [];
-    const keepMs = tellCfgV2().keepMs;
-    socialV2.tellNotes = socialV2.tellNotes.filter((n) => now - Number(n.at) < keepMs);
-    const mine = socialV2.tellNotes.filter((n) => n.to === to);
-    if (mine.length >= TELL_NOTES_PER_KEY) {
-      const drop = new Set(mine.slice(0, mine.length - TELL_NOTES_PER_KEY + 1));
-      socialV2.tellNotes = socialV2.tellNotes.filter((n) => !drop.has(n));
-    }
-    socialV2.tellNotes.push({ id: `t${(now % 1e8).toString(36)}${(tellSeq++).toString(36)}`, from, to, note, at: now });
-    saveSocialV2State();
+    const tail = to === PLAY_KEY
+      ? '照着做，不用回话。'
+      : '照着做。这边要是得跟人说一声，就像自己想起来的那样自然地说，别提是谁让的、在哪答应的，那边聊的内容也别搬过来。';
+    if (await tellWindowV2(to, `【捎给自己的话】${to}（令牌 ${st.agentToken}）你 ${whenV2(now)} 在${fromLabel}答应了：${defang(note)}\n${tail}`, '[捎话]')) return 'steered';
+    leaveNoteV2('tell', to, { id: `t${(now % 1e8).toString(36)}${(tellSeq++).toString(36)}`, from, note }, now);
     return 'stored';
   }
   // 拼进 key 的唤醒提示
   function tellPromptLineV2(key, now = Date.now()) {
     const list = tellNotesOfV2(key, now);
-    tellPromptIds.set(key, list.map((n) => n.id));
+    noteNotesShownV2(key, 'tell', list.map((n) => n.id));
     if (!list.length) return '';
     const tail = key === PLAY_KEY
       ? '是你自己捎来的，照着做。'
@@ -150,12 +134,7 @@ export function createTellMyself(app) {
     return `【捎给自己的话】你在别的窗口答应了，到这里也要照着做：\n${list.map((n) => `- ${whenV2(n.at)} 在${tellFromLabelV2(n.from, key)}：${defang(n.note)}`).join('\n')}\n${tail}\n\n`;
   }
   function markTellShownV2(key) {
-    const ids = tellPromptIds.get(key);
-    tellPromptIds.delete(key);
-    if (!ids?.length) return;
-    const set = new Set(ids);
-    socialV2.tellNotes = (socialV2.tellNotes || []).filter((n) => !set.has(n.id));
-    saveSocialV2State();
+    markNotesShownV2(key, ['tell']);
   }
 
   // POST /api/socialV2/tell-myself 的主体（令牌、白名单、工具开关在 console-server 里查过了）
@@ -208,6 +187,85 @@ export function createTellMyself(app) {
     return result;
   }
 
+  // ── 替这里去别的窗口说句话（qq_send_elsewhere） ──────────────────
+  // 2026-10-27：爸爸在私聊让她跟妈妈说晚安，她拿私聊的令牌往小群发，被“agent token 无效”挡回来，
+  // 回头跟爸爸说“我喊啦，她没应我”（10-22 17:22 也这样往小群发过一次）。qq_tell_myself 只是记给那边的自己（不叫醒、6 小时就过期），她又快睡了，
+  // 这种“现在就去那边说一句”的事没有工具能做。现在主人刚在这里说过话，就能直接发到私聊和家里的小群；
+  // 那边的会话下次看消息时在 yourPlaySelfSent 里看到一次（和自由时间那边发进聊天的一样，记成 byPlay，
+  // 不算那边自己开口：不触发接话、不算门控回复）。家里以外的群不行（主人：不要被大群污染了），那边用 qq_tell_myself。
+  const sendElsewhereTimes = [];
+  function sendElsewhereCfgV2() {
+    const c = cfg.socialV2?.sendElsewhere ?? {};
+    const num = (v, d) => (v !== undefined && v !== null && Number.isFinite(Number(v)) ? Number(v) : d);
+    return { maxPerHour: Math.max(0, num(c.maxPerHour, 6)) }; // 0 = 不限
+  }
+  // POST /api/socialV2/send-elsewhere 的主体（来源的令牌、工具开关在 console-server 里查过了）
+  // body: { to, messages: string | string[], atUserId? }
+  async function sendElsewhereV2(key, body, now = Date.now()) {
+    if (!tellSourceOkV2(key)) return { ok: false, status: 403, error: '只能在私聊和家里的小群里用' };
+    if (tellCfgV2().ownerMinutes && !ownerSpokeV2(key, 0, now)) {
+      return { ok: false, status: 403, error: '只有主人刚在这里让你去那边说的才能发；没发出去，跟这边照实说就好' };
+    }
+    const to = canonicalV2Key(String(body?.to ?? '').trim()) ?? String(body?.to ?? '').trim();
+    const m = /^(private|group):(\d+)$/.exec(to);
+    if (!m) return { ok: false, status: 400, error: 'to 要填那个聊天的 key，比如 "group:123" 或 "private:456"' };
+    if (to === key) return { ok: false, status: 400, error: 'to 是这里自己；这里的话用 qq_send_message 说' };
+    if (isOutsideGroupKeyV2(to)) {
+      return { ok: false, status: 403, error: '只能发到私聊和家里的小群；要那个群里的你跟大家说一声，用 qq_tell_myself 捎过去' };
+    }
+    if (!isSessionAllowedInCurrentMode(to)) return { ok: false, status: 403, error: '那个聊天不在能说话的范围里，没发出去' };
+    if (noReachOut(cfg, to)) return { ok: false, status: 403, error: '那边你不主动去找，没发出去；要跟那个人说，就去家里的小群说，或者等他来找你' };
+    if (shouldBlockSilentReply(to)) return { ok: false, status: 403, error: '现在不能往那边发（静默模式），没发出去' };
+    const raw = Array.isArray(body?.messages) ? body.messages : [body?.messages];
+    const asked = raw.map((x) => String(x ?? '').trim()).filter(Boolean);
+    if (!asked.length) return { ok: false, status: 400, error: 'messages 不能为空：写你要在那边说的话' };
+    const atUserId = body?.atUserId !== undefined && body?.atUserId !== null && String(body.atUserId).trim() !== '' ? String(body.atUserId).trim() : null;
+    if (atUserId && (m[1] === 'private' || !/^\d+$/.test(atUserId))) return { ok: false, status: 400, error: m[1] === 'private' ? '私聊不需要 @' : 'atUserId 要填 QQ 号' };
+    const messages = mergeBubblesV2(asked, bubbleCapV2(to));
+    const sendCfg = cfg.socialV2?.send ?? {};
+    const maxChars = Math.max(1, Number(sendCfg.maxMessageChars) || 500);
+    for (const msg of messages) {
+      if (msg.length > maxChars) return { ok: false, status: 400, error: `单条消息不能超过 ${maxChars} 字` };
+      if (SENSITIVE_RE.test(msg)) return { ok: false, status: 403, error: '消息含敏感信息，已阻止发送' };
+    }
+    const c = sendElsewhereCfgV2();
+    while (sendElsewhereTimes.length && now - sendElsewhereTimes[0] >= 3600000) sendElsewhereTimes.shift();
+    if (c.maxPerHour && sendElsewhereTimes.length >= c.maxPerHour) {
+      return { ok: false, status: 429, error: '这一小时往别处发得太多了，先不发了；没发出去，跟这边照实说' };
+    }
+    sendElsewhereTimes.push(now);
+    const st = getSocialV2State(to);
+    const fromLabel = convLabelV2(key, socialV2.conversations.get(key));
+    const record = (list) => recordSentMessagesV2(to, list, { byPlay: true, relayFrom: key, relayFromLabel: fromLabel, toUserIds: atUserId ? [atUserId] : [] });
+    const delays = computeGapsV2(messages, 'auto', 0, [], sendCfg);
+    try {
+      const sent = await sendMessagesV2(to, messages, delays, null, atUserId);
+      if (sent.length) record(sent);
+      st.lastActionAt = now;
+      saveSocialV2State();
+      const notSent = Array.isArray(sent.notSent) ? sent.notSent : [];
+      log(`[跨窗口] ${key} → ${to}：发了 ${sent.length}/${messages.length} 条${notSent.length ? '（那边有人插话，后面的没发）' : ''}：${sent.join(' / ').slice(0, 120)}`);
+      appendActivity(`${key} → ${to} [跨窗口] 发了 ${sent.length}/${messages.length} 条`);
+      const merged = asked.length > messages.length ? `你写了 ${asked.length} 条，那边一次最多 ${messages.length} 条，多的并进最后一条了。` : '';
+      return {
+        ok: true, to, sent: sent.length,
+        ...(notSent.length ? { notSent, interrupted: true } : {}),
+        hint: notSent.length
+          ? `${to} 那边发了前 ${sent.length} 条，正好有人说话，后面 ${notSent.length} 条（notSent）没发。跟这边说的时候照实说发了哪些。`
+          : `已经在 ${to} 说了。${merged}那边的你下次看消息时会知道这几句是你从这里发的。跟这边说一声就好，不用讲你怎么办到的；那边有人回话，是那边的你去接。`,
+      };
+    } catch (error) {
+      if (error?.sent?.length) record(error.sent);
+      if (!error?.sent?.length) {
+        const i = sendElsewhereTimes.lastIndexOf(now);
+        if (i >= 0) sendElsewhereTimes.splice(i, 1);
+      }
+      saveSocialV2State();
+      log(`[跨窗口] ${key} → ${to} 发送失败：${error?.message ?? error}`);
+      return { ok: false, status: 500, error: `${error?.message ?? error}跟这边照实说没发出去（或只发了一部分），别说已经发了。` };
+    }
+  }
+
   return {
     exports: {
       clearPlayHoldV2,
@@ -215,6 +273,7 @@ export function createTellMyself(app) {
       playHoldBlocksV2,
       playHoldLineV2,
       playHoldV2,
+      sendElsewhereV2,
       tellMyselfV2,
       tellNotesOfV2,
       tellPromptLineV2,
@@ -222,9 +281,11 @@ export function createTellMyself(app) {
     },
     link() {
       ({
-        convLabelV2, getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2,
-        saveSocialV2State, socialV2, turnRunningV2, whenV2
+        bubbleCapV2, computeGapsV2, convLabelV2, getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2,
+        leaveNoteV2, markNotesShownV2, mergeBubblesV2, noteNotesShownV2, notesOfV2, recordSentMessagesV2, saveSocialV2State,
+        sendMessagesV2, socialV2, tellWindowV2, turnRunningV2, whenV2
       } = app);
+      app.defineNoteKindV2('tell', { keepMs: () => tellCfgV2().keepMs, perTarget: TELL_NOTES_PER_KEY });
     },
     start() {},
   };

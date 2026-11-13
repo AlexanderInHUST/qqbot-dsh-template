@@ -26,13 +26,14 @@ services:
       dockerfile: control/Dockerfile
       args:
         NODE_IMAGE: node:22.23.2-bookworm-slim
-        DSH_VERSION: 0.2.0-rc.2
+        DSH_VERSION: 0.2.2-rc.1
         PNPM_VERSION: 10.33.0
     image: qqbot-control:local
     command: ["/usr/local/bin/entrypoint-dsh.sh"]
     environment:
       TZ: Asia/Shanghai
-      # 中转站一次请求超过 32 张图会报 400；超过 28 张时 DSH 把最早的 6 张换成文字占位（control/patch-pi-ai-image-count.mjs）
+      # 中转站一次请求超过 32 张图会报 400：pi-ai 供应商的上限写在 config/dsh/home.cordis.patch.yml（maxRequestImages 28）；
+      # 这两个变量现在只给会话压缩补丁用（control/patch-dsh-compaction-qq.mjs 按它留最后 24 张）
       DSH_PI_AI_MAX_REQUEST_IMAGES: "28"
       DSH_PI_AI_IMAGE_OFFLOAD_QUANTUM: "6"
       # 模型中转站 aiohub 的 Key（备用模型，可以不填），见 config/dsh/home.cordis.patch.yml 里的 llm-pi-ai
@@ -62,6 +63,7 @@ services:
     command: ["/usr/local/bin/entrypoint-bridge.sh"]
     environment:
       TZ: Asia/Shanghai   # 唤醒提示里的“当前时间”、夜间降低主动概率都按这个时区
+      AIOHUB_API_KEY: ${AIOHUB_API_KEY:-}   # qq_draw 画画（socialV2.draw，aiohub 的图像模型）
     network_mode: "service:dsh"
     volumes: *control-volumes
     depends_on: [dsh, snowluma]
@@ -230,6 +232,9 @@ networks:
       config:
         # 与 egress/squid.conf 里的 sandbox_src 保持一致
         - subnet: 172.31.250.0/24
+          # egress-proxy 固定 .2、sandbox 固定 .10，别的（mcp-gw）只从后半段自动分配。
+          # 2026-11-12 电脑重启后 Docker 自己拉起容器，mcp-gw 先起来占了 .2，egress-proxy 起不来
+          ip_range: 172.31.250.128/25
 
 volumes:
   dsh-home: {}         # DSH 配置、会话、模型 API Key（.credentials.yaml）

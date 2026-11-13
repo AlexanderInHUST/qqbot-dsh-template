@@ -61,6 +61,24 @@ test('触发它的那条消息还没给她看过，照样补发', () => fixture(
   assert.equal(h.replayPendingWakeReasonsV2('group:456')?.action, 'replayed');
 }));
 
+// 2026-10-28 08:43 群 1000000004：队头的 talkBack 已经看过被跳过，排在后面的 @ 一直等到下一回合结束
+test('队头那条看过了，后面没看过的 @ 同一次就补发', () => fixture(async ({ h, st, call, append }) => {
+  append('好好好');
+  const seenSeq = st.lastUnreadSeq;
+  const waited = await call('/api/socialV2/wait', st.agentToken, { timeoutMs: 1000, quietMs: 100 });
+  await call('/api/socialV2/mark-read', st.agentToken, { throughSeq: waited.data.readThroughSeq });
+  append('给我换成三星米其林 @鱼妹');
+  st.pendingWakeReasons = [{ reason: 'talkBack', seq: seenSeq }, { reason: 'atMention', seq: st.lastUnreadSeq }];
+  const r = h.replayPendingWakeReasonsV2('group:456');
+  assert.equal(r?.action, 'replayed');
+  assert.equal(r?.reason, 'atMention');
+  // 夹具里会话还算忙着，补发的会再排回队列；看过的 talkBack 不再留着
+  assert.ok(st.pendingWakeTimer || st.pendingWakeReasons.some((x) => x.reason === 'atMention'), '补发了那条 @');
+  assert.equal(st.pendingWakeReasons.some((x) => x.reason === 'talkBack'), false);
+  clearTimeout(st.pendingWakeTimer);
+  st.pendingWakeTimer = null;
+}));
+
 test('play 发进群里的话出现在聊天会话的等待结果里，只给一次', () => fixture(async ({ st, play, call }) => {
   const started = Date.now();
   const pending = call('/api/socialV2/wait', st.agentToken, { timeoutMs: 5000, quietMs: 100 });
@@ -100,10 +118,11 @@ test('唤醒快照带上 play 刚发的话，投递后标成已给过', () => fi
 }, { wakeFirst: false }));
 
 // 假的 extras（/relay/prepare、/relay/cancel）+ 假的 OneBot
+const bgRefresh = (u) => /^http:\/\/extras:8940\/(bili\/watched|life\?)/.test(String(u)); // 启动时拉看过的视频、今天的计划（第 7 步）
 function memeFetch(prepare, seen) {
   return async (url, init = {}) => {
     const body = (() => { try { return JSON.parse(init.body ?? '{}'); } catch { return init.body; } })();
-    seen.push({ url: String(url), body });
+    if (!bgRefresh(url)) seen.push({ url: String(url), body });
     const json = String(url).endsWith('/relay/prepare') ? prepare(body)
       : String(url).endsWith('/relay/cancel') ? { ok: true }
         : { status: 'ok', retcode: 0, data: { message_id: 9002 } };

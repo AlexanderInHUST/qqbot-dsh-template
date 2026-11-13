@@ -146,6 +146,12 @@ def _fold(subject: str, rows: list[dict], target: int) -> str:
 def run_once() -> dict:
     cfg = _cfg()
     done = {}
+    import milestones
+    if milestones.enabled():  # 先挑成长记录：昨天的记忆还没被淡掉、折掉
+        try:
+            done["milestones"] = milestones.pick_night(night_complete)
+        except Exception as exc:  # noqa: BLE001 - the day is tried again tomorrow night
+            done["milestones"] = f"skipped: {exc}"
     gone = memory.drop_faded(float(cfg["forgetBelow"]))
     if gone:
         done["forgotten"] = [f"{e['subject']} {e['text'][:30]}" for e in gone]
@@ -172,7 +178,23 @@ def run_once() -> dict:
                 done[subject + " card"] = f"{len(r.get('applied') or [])} changes"
             except Exception as exc:  # noqa: BLE001 - keep the old card
                 done[subject + " card"] = f"skipped: {exc}"
+    import selfprofile
+    if selfprofile.enabled():  # she grows up a little (most nights nothing changes)
+        done["self profile"] = evolve_profile()
     return done
+
+
+def evolve_profile() -> str:
+    import selfprofile
+    try:
+        r = selfprofile.evolve(night_complete)
+        return r.get("skipped") or f"{len(r.get('applied') or [])} changes"
+    except Exception as exc:  # noqa: BLE001 - keep her as she is
+        return f"failed: {exc}"
+
+
+# 4 点那次连不上（11-07、11-10 都是 DNS 解析失败，那一晚就没长），之后每小时再试一次，试到 RETRY_HOURS 小时后
+RETRY_HOURS = 4
 
 
 def _loop() -> None:
@@ -181,11 +203,21 @@ def _loop() -> None:
         today = time.strftime("%Y-%m-%d")
         with LOCK:
             last = load_json(PATH, {}).get("lastRun")
-        if cfg.get("enabled", True) and last != today and time.localtime().tm_hour == int(cfg.get("hour", 4)):
+        hour = int(cfg.get("hour", 4))
+        if cfg.get("enabled", True) and last != today and time.localtime().tm_hour == hour:
             result = run_once()
             with LOCK:
-                save_json(PATH, {"lastRun": today, "result": result})
+                save_json(PATH, {"lastRun": today, "result": result, "at": time.time()})
             print(f"[consolidate] {today}: {result}", flush=True)
+        elif cfg.get("enabled", True) and last == today and hour < time.localtime().tm_hour <= hour + RETRY_HOURS:
+            with LOCK:
+                st = load_json(PATH, {})
+            result = st.get("result") or {}
+            if str(result.get("self profile", "")).startswith("failed") and time.time() - float(st.get("at") or 0) >= 3000:
+                result["self profile"] = evolve_profile()
+                with LOCK:
+                    save_json(PATH, {**st, "result": result, "at": time.time()})
+                print(f"[consolidate] {today} 再试一次长大：{result['self profile']}", flush=True)
         time.sleep(600)
 
 

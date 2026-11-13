@@ -1,0 +1,153 @@
+﻿<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=9">
+<title>鱼妹开关</title>
+<hta:application id="yumei" applicationname="鱼妹开关" border="dialog" maximizebutton="no" scroll="no" singleinstance="yes" />
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; font-size: 14px; margin: 16px; background: #f6f7f9; }
+  h2 { margin: 0 0 12px 0; font-size: 18px; }
+  button { font-family: inherit; font-size: 16px; width: 150px; height: 44px; margin-right: 10px; cursor: pointer; }
+  #stop { background: #ffe1e1; } #start { background: #dcf5dc; } #status { width: 100px; }
+  #state { margin: 12px 0 6px 0; font-weight: bold; }
+  #log { width: 100%; height: 250px; background: #fff; border: 1px solid #ccc; padding: 6px; overflow-y: scroll; white-space: pre-wrap; font-family: Consolas, "Microsoft YaHei", monospace; font-size: 12px; }
+</style>
+<script language="JScript">
+// 鱼妹一键关 / 一键开。真正干活的是 WSL 里的 scripts/yumei-power.sh（停容器前先记下“爸爸要打游戏把她关了”，她醒来会知道）。
+// 关：yumei-power.sh stop（停完容器备份一次她的数据，scripts/backup-auto.sh daily）→ 停 Docker Desktop → wsl --shutdown（WSL 里开着的东西全关，包括 Claude Code）
+// 开：启动 Docker Desktop → yumei-power.sh start → 打开 QQ 登录页 → 等 QQ 连上
+var REPO = "/home/you/qqbot_agent";   // 改成仓库在 WSL 里的路径
+var DISTRO = "Ubuntu";
+var ENV = new ActiveXObject("WScript.Shell");
+var DOCKER = ENV.ExpandEnvironmentStrings("%LOCALAPPDATA%") + "\\Programs\\DockerDesktop\\resources\\bin\\docker.exe";
+var LOGIN_URL_FILE = ENV.ExpandEnvironmentStrings("%USERPROFILE%") + "\\Desktop\\QQ登录（鱼妹）.url";
+var LOGIN_URL = "http://127.0.0.1:6081/vnc.html";
+
+var sh = new ActiveXObject("WScript.Shell");
+var fso = new ActiveXObject("Scripting.FileSystemObject");
+// 桌面双击 .hta 用的是 32 位 mshta，访问 System32 会被转到 SysWOW64（那里没有 wsl.exe），要走 Sysnative
+var WSL = fso.FileExists("C:\\Windows\\Sysnative\\wsl.exe") ? "C:\\Windows\\Sysnative\\wsl.exe" : "C:\\Windows\\System32\\wsl.exe";
+var work = sh.ExpandEnvironmentStrings("%TEMP%") + "\\yumei-power";
+if (!fso.FolderExists(work)) fso.CreateFolder(work);
+var outFile = work + "\\step.log", doneFile = work + "\\step.done";
+var busy = false, steps = [], lastOut = "", waitLeft = 0;
+
+function power(arg) { return "set WSL_UTF8=1&& \"" + WSL + "\" -d " + DISTRO + " --cd " + REPO + " --exec bash scripts/yumei-power.sh " + arg; }
+
+function readUtf8(path) {
+  if (!fso.FileExists(path)) return "";
+  try {
+    var s = new ActiveXObject("ADODB.Stream");
+    s.Type = 2; s.Charset = "utf-8"; s.Open(); s.LoadFromFile(path);
+    var t = s.ReadText(); s.Close(); return t;
+  } catch (e) { return ""; }
+}
+function addLog(text) {
+  var el = document.getElementById("log");
+  el.innerText += text.replace(/\r/g, "") + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+function setState(text) { document.getElementById("state").innerText = text; }
+function lock(on) {
+  busy = on;
+  document.getElementById("stop").disabled = on;
+  document.getElementById("start").disabled = on;
+  document.getElementById("status").disabled = on;
+}
+
+// 一步一步跑，每步在隐藏的 cmd 里跑完写退出码，这边每秒看一次，界面不卡
+function runSteps(list) { steps = list; lock(true); next(); }
+function next() {
+  while (steps.length && steps[0].skip && steps[0].skip(lastOut)) steps.shift();
+  if (!steps.length) { lock(false); return; }
+  var st = steps.shift();
+  if (st.js) { st.js(lastOut); next(); return; }
+  setState(st.title);
+  addLog("== " + st.title);
+  try { fso.DeleteFile(outFile); } catch (e) {}
+  try { fso.DeleteFile(doneFile); } catch (e) {}
+  sh.Run("cmd /v:on /c \"" + st.cmd + " > \"" + outFile + "\" 2>&1 & echo !errorlevel! > \"" + doneFile + "\"\"", 0, false);
+  var tries = 0;
+  var timer = window.setInterval(function () {
+    tries++;
+    if (!fso.FileExists(doneFile) && tries < (st.maxSec || 600)) return;
+    window.clearInterval(timer);
+    lastOut = readUtf8(outFile);
+    var code = String(readUtf8(doneFile)).replace(/\s/g, "");
+    if (lastOut.replace(/\s/g, "")) addLog(lastOut);
+    if (code !== "0" && !st.okToFail) {
+      addLog("（这一步没成功，退出码 " + (code || "超时") + "）");
+      if (st.onFail) { steps = st.onFail.concat(steps); }
+      else { setState("出错了：" + st.title + "，看下面的输出"); steps = []; }
+    }
+    next();
+  }, 1000);
+}
+
+function dockerUp(out) { return /Status\s+running/i.test(out); }
+
+function checkStatus() {
+  if (busy) return;
+  runSteps([
+    { title: "看 Docker 开着没", cmd: "\"" + DOCKER + "\" desktop status", okToFail: true, maxSec: 30 },
+    { js: function (out) { if (!dockerUp(out)) setState("现在是关着的（Docker 没开，鱼妹不在线）"); } },
+    { title: "看鱼妹在不在", cmd: power("status"), skip: function (out) { return !dockerUp(out); }, maxSec: 60 },
+    { js: function (out) {
+      if (!/running/.test(out)) return;
+      setState(/已连接/.test(out) ? "鱼妹在线" : /bridge\s+running/.test(out) ? "容器开着，QQ 还没连上（去登录页点“登录”）" : "开着一部分，看下面的输出");
+    } }
+  ]);
+}
+
+function stopAll() {
+  if (busy) return;
+  if (!window.confirm("关掉鱼妹、Docker 和整个 WSL？\n\nWSL 里开着的东西（包括 Claude Code）都会关掉。鱼妹下次起来会知道是爸爸要打游戏把她关了。")) return;
+  document.getElementById("log").innerText = "";
+  runSteps([
+    { title: "看 Docker 开着没", cmd: "\"" + DOCKER + "\" desktop status", okToFail: true, maxSec: 30 },
+    { title: "记下原因，停掉鱼妹的容器，备份一下她的数据", cmd: power("stop"), skip: function (out) { return !dockerUp(out); }, okToFail: true, maxSec: 300 },
+    { title: "关 Docker Desktop", cmd: "\"" + DOCKER + "\" desktop stop --timeout 120", maxSec: 150,
+      onFail: [{ title: "强制关 Docker Desktop", cmd: "\"" + DOCKER + "\" desktop stop --force --timeout 60", okToFail: true, maxSec: 90 }] },
+    { title: "关 WSL", cmd: "\"" + WSL + "\" --shutdown", okToFail: true, maxSec: 120 },
+    { js: function () { setState("都关好了，去玩吧。玩好了点“一键启动”。"); } }
+  ]);
+}
+
+function startAll() {
+  if (busy) return;
+  document.getElementById("log").innerText = "";
+  runSteps([
+    { title: "启动 Docker Desktop（一两分钟）", cmd: "\"" + DOCKER + "\" desktop start --timeout 300", maxSec: 330 },
+    { title: "拉起鱼妹的容器（要几分钟，别关窗口）", cmd: power("start"), maxSec: 900 },
+    { js: function () {
+      addLog("== 打开 QQ 登录页：在那里点一下“登录”");
+      sh.Run(fso.FileExists(LOGIN_URL_FILE) ? "\"" + LOGIN_URL_FILE + "\"" : LOGIN_URL, 1, false);
+      waitLeft = 60; // 每 10 秒看一次，最多 10 分钟
+    } }
+  ].concat(waitLoginSteps()));
+}
+// 等 QQ 登录：看一次状态，没连上就把自己再排进去
+function waitLoginSteps() {
+  return [
+    { title: "等 QQ 登录上（在登录页点“登录”）", cmd: "ping -n 11 127.0.0.1 >nul & " + power("status"), okToFail: true, maxSec: 90 },
+    { js: function (out) {
+      if (/已连接/.test(out)) { setState("鱼妹上线了"); addLog("鱼妹上线了。"); return; }
+      if (--waitLeft > 0) { steps = waitLoginSteps().concat(steps); return; }
+      setState("10 分钟还没等到 QQ 连上，去登录页看看，好了点“看状态”");
+    } }
+  ];
+}
+
+window.onload = function () {
+  try { window.resizeTo(560, 520); } catch (e) {}
+  checkStatus();
+};
+</script>
+</head>
+<body>
+  <h2>🐟 鱼妹开关</h2>
+  <button id="stop" onclick="stopAll()">一键关闭</button><button id="start" onclick="startAll()">一键启动</button><button id="status" onclick="checkStatus()">看状态</button>
+  <div id="state">…</div>
+  <div id="log"></div>
+</body>
+</html>

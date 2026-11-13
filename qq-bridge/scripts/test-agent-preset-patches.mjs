@@ -53,6 +53,7 @@ for (const name of PRESETS) {
   const expected = structuredClone(source);
   for (const r of expected) if (r.name === './qq-tool-restrict.mjs') r.name = GUARD_SPECIFIER;
   for (const r of expected) if (r.name === './qq-persona-card.mjs') r.name = 'qq-agent-presets/qq-persona-card.mjs';
+  for (const r of expected) if (r.name === './qq-native-tools.mjs') r.name = 'qq-agent-presets/qq-native-tools.mjs';
   assert.deepEqual(row.config.plugins, expected, `${name}: config.plugins 必须与 agent.cordis.yml 完全一致（守卫名除外）`);
   ok(true, `${name}: config.plugins 与 agent.cordis.yml 逐字一致（${expected.length} 行）`);
 

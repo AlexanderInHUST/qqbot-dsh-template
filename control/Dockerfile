@@ -4,7 +4,7 @@ ARG NODE_IMAGE=node:22.23.2-bookworm-slim
 FROM ${NODE_IMAGE}
 
 # 版本全部写死，升级时在 docker-compose.yml 里一起改
-ARG DSH_VERSION=0.2.0-rc.2
+ARG DSH_VERSION=0.2.2-rc.1
 ARG PNPM_VERSION=10.33.0
 
 # ffmpeg：qq-bridge 把 QQ 动图抽帧拼成宫格给模型看（patches 里的 src/gif-frames.js）
@@ -16,10 +16,8 @@ RUN apt-get update \
 RUN npm install -g --no-audit --no-fund "@deepseek-ai/dsh@${DSH_VERSION}" "pnpm@${PNPM_VERSION}" \
  && dsh --version
 
-# pi-ai 适配器补一个“每次请求最多几张图”的上限（中转站超过 32 张图就报 400），见脚本注释
-COPY control/patch-pi-ai-image-count.mjs /opt/qqbot-patches/
-RUN node /opt/qqbot-patches/patch-pi-ai-image-count.mjs \
-      "$(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js"
+# 以前这里给 pi-ai 适配器补“每次请求最多几张图”（control/patch-pi-ai-image-count.mjs）；
+# DSH 0.2.2 起供应商配置自带 maxRequestImages / imageOffloadCountQuantum，写在 config/dsh/home.cordis.patch.yml 里
 
 # 工具参数里的 anyOf [X, null] 会让中转站的 Gemini 拒绝整个请求，见脚本注释
 COPY control/patch-pi-ai-tool-schema-null.mjs /opt/qqbot-patches/

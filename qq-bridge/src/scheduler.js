@@ -1,6 +1,10 @@
 // 桥接里所有“每隔一会儿做一次”的事都登记在这里（2026-10-24 以前是散在各处的 10 个 setInterval）。
 // 一个 1 秒的心跳挨个看谁到点了；同一件事上一次还没做完（async 没返回）就跳过这一拍，不会叠起来；
 // 出错按名字记日志，同样的错 10 分钟只记一次。控制台 GET /api/scheduler 能看每件事最近一次跑了多久、错在哪。
+// 2026-11-08 起“到点做一次”的也登记在这里（at / after）：潜水到期、限频重试、闲时压缩、换备用模型后的探测。
+// 到点时间都按 now() 比，不用 setTimeout 的长延时（超过 2^31 毫秒会当 1 毫秒、系统时钟跳了也不知道）；
+// 测试里拨了时钟再 tick() 一下就能让它们到点。到点时间本身存在各自模块的状态里（sleepUntil、proactiveNextAt……），
+// 重启后模块按存的时间重新登记。几秒的防抖（合并唤醒、门控攒一批）还是 setTimeout。
 
 const HEARTBEAT_MS = 1000;
 const SAME_ERROR_QUIET_MS = 10 * 60 * 1000;
@@ -29,7 +33,8 @@ export function createScheduler({ log = () => {}, now = Date.now, heartbeatMs = 
 
   function run(job) {
     const t = now();
-    job.nextAt = t + job.everyMs;
+    // 一次性的：先摘掉再跑，fn 里可以用同一个名字再登记下一次
+    if (job.once) { if (jobs.get(job.name) === job) jobs.delete(job.name); } else job.nextAt = t + job.everyMs;
     if (job.running) { job.skipped += 1; return; }
     job.running = true;
     job.lastRunAt = t;
@@ -68,6 +73,21 @@ export function createScheduler({ log = () => {}, now = Date.now, heartbeatMs = 
       if (firstDelayMs <= 0) run(job);
       return job;
     },
+    // 到 atMs 跑一次 fn，跑完就没了；同名再登记就改成新的时间
+    at(name, atMs, fn) {
+      const due = Number(atMs);
+      if (!Number.isFinite(due)) throw new Error(`定时任务 ${name} 的时间不对：${atMs}`);
+      const job = {
+        name, once: true, everyMs: 0, fn, nextAt: due, running: false,
+        runs: 0, skipped: 0, errors: 0, lastRunAt: 0, lastMs: 0, lastError: '', lastErrorAt: 0, lastErrorLoggedAt: 0,
+      };
+      jobs.set(name, job);
+      ensureTimer();
+      return job;
+    },
+    after(name, ms, fn) { return this.at(name, now() + Math.max(0, Number(ms) || 0), fn); },
+    // 什么时候到点（没登记就是 0）
+    dueAt(name) { return jobs.get(name)?.nextAt ?? 0; },
     has(name) { return jobs.has(name); },
     cancel(name) { return jobs.delete(name); },
     // 测试用：不等心跳，直接看一遍
@@ -80,6 +100,7 @@ export function createScheduler({ log = () => {}, now = Date.now, heartbeatMs = 
       const t = now();
       return [...jobs.values()].map((job) => ({
         name: job.name,
+        ...(job.once ? { once: true } : {}),
         everyMs: job.everyMs,
         running: job.running,
         runs: job.runs,

@@ -50,6 +50,10 @@ function sanitizeQuery(query) {
     .slice(0, 120);
 }
 
+// qqbot_agent（2026-11-10）：查到的是大人写的资料，她照着念就成了分析师（主人勾“不像”的大多是大群里报财报数字、讲引擎原理）。
+// 提示词里写了还不够，放在结果里、她要开口的地方再说一句；回放对比见 docs/CHANGELOG.md 2026-11-10
+const KID_HINT = '这是大人写的资料。跟人说的时候用你自己的话，像小孩子转述听来的，挑一两点最好懂的说，别照着念数字、百分比和专业词。';
+
 const server = new McpServer({ name: 'web-search-safe', version: '0.2.0-r4' });
 
 server.tool(
@@ -63,7 +67,7 @@ server.tool(
     }
     try {
       const result = await webSearch(clean, { root: projectRoot() });
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ ...result, hint: KID_HINT }, null, 2) }] };
     } catch (error) {
       return {
         content: [{ type: 'text', text: `搜索失败：${error?.message ?? error}` }],
@@ -92,7 +96,7 @@ server.tool(
         return { content: [{ type: 'text', text: '这个网站主人不喜欢你去看，换一个吧。' }], isError: true };
       }
       const result = await safeFetch(url);
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: JSON.stringify({ ...result, hint: KID_HINT }, null, 2) }] };
     } catch (error) {
       return {
         content: [{ type: 'text', text: `抓取失败：${error?.message ?? error}` }],

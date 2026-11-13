@@ -46,6 +46,7 @@ export const GUARD_SPECIFIER = 'qq-agent-presets/qq-tool-restrict.mjs';
 const RELATIVE_ROW_REWRITES = new Map([
   ['./qq-tool-restrict.mjs', GUARD_SPECIFIER],
   ['./qq-persona-card.mjs', 'qq-agent-presets/qq-persona-card.mjs'],
+  ['./qq-native-tools.mjs', 'qq-agent-presets/qq-native-tools.mjs'],
 ]);
 
 export const BUNDLE_DIR = path.join(REPO_ROOT, 'plugins', 'qq-agent-presets');

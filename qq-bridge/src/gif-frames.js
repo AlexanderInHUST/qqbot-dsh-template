@@ -64,3 +64,25 @@ export async function animatedSheet(buffer, mimeType, opts = {}) {
 export function sheetNote(sheet) {
   return `（动图，共 ${sheet.frames} 帧；按播放顺序均匀抽了 ${sheet.picked} 帧拼成 ${sheet.cols}×${sheet.rows} 宫格，从左到右、从上到下看就是它的动作）`;
 }
+
+/**
+ * 画出来的 PNG（1024×1024 两兆多）转成 JPEG（三四百 KB）再存、再发：留几天也不占地方，再给她看也省 token。
+ * opts.quality 是 ffmpeg 的 -q:v（2~31，越小越清楚，默认 3）。出错返回 null（调用方用原图）。
+ */
+export async function toJpeg(buffer, opts = {}) {
+  if (!buffer?.length) return null;
+  const quality = Math.max(2, Math.min(31, Math.round(Number(opts.quality) || 3)));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jpeg-'));
+  const input = path.join(dir, 'in.png');
+  const output = path.join(dir, 'out.jpg');
+  try {
+    fs.writeFileSync(input, buffer);
+    await run(opts.ffmpeg || 'ffmpeg', ['-v', 'error', '-y', '-i', input, '-q:v', String(quality), '-frames:v', '1', output], Number(opts.timeoutMs) || 30000);
+    const out = fs.readFileSync(output);
+    return out.length && out[0] === 0xff && out[1] === 0xd8 ? out : null;
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}

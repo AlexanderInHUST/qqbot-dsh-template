@@ -91,7 +91,6 @@ export function createStickers(app) {
     if (!entry) throw new Error(`找不到表情 ${stickerRef}，请先用 qq_list_stickers 获取有效 id`);
     const url = entry.url;
     if (!url) throw new Error(`表情 ${entry.id} 没有可发送的图片地址`);
-    const [kind, id] = key.split(':');
     const segments = [];
     const replyToMessageId = options.replyToMessageId;
     const atUserId = options.atUserId;
@@ -115,9 +114,6 @@ export function createStickers(app) {
       throw new Error(`表情 ${entry.id} 的图片下载失败（QQ CDN 网络异常或地址已失效）：${error?.message ?? error}`);
     }
     segments.push({ type: 'image', data: { file: 'base64://' + image.buffer.toString('base64') } });
-    const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
-    const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
-    const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
     // 与文本发送共用 sendChain，保证“先文字后表情”的真人顺序不被并发工具调用打乱。
     let sendResolve;
     let sendReject;
@@ -130,21 +126,7 @@ export function createStickers(app) {
         // 真人发表情前通常会有短暂停顿，避免“文字刚发完表情立刻跟上”的机械感。
         await sleep(randInt(800, 2000));
         assertSendAllowed();
-        const res = await fetch(`${httpUrl}/${action}`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
-          },
-          body: JSON.stringify(params),
-          signal: AbortSignal.timeout(15000)
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || body.status !== 'ok' || body.retcode !== 0) {
-          const hint = res.status === 426 ? '（HTTP 426：snowluma.httpUrl 可能指向了 WebSocket 端口，请检查 config.json 的 snowluma.httpUrl 是否为 OneBot HTTP API 地址）' : '';
-          throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}${hint}`);
-        }
-        sendResolve(body.data);
+        sendResolve(await app.qqOut(key, segments, { origin: 'her', timeoutMs: 15000 }));
       } catch (error) {
         sendReject(error);
       }
@@ -163,12 +145,8 @@ export function createStickers(app) {
   }
 
   // 一条 QQ 消息可以带多段（几张图 + 一句话），沙雕图转发用
-  async function sendSegmentsV2(key, segments) {
+  async function sendSegmentsV2(key, segments, opts = {}) {
     const assertSendAllowed = captureSendGuard(key);
-    const [kind, id] = key.split(':');
-    const action = kind === 'private' ? 'send_private_msg' : 'send_group_msg';
-    const params = kind === 'private' ? { user_id: Number(id), message: segments } : { group_id: Number(id), message: segments };
-    const httpUrl = String(cfg.snowluma?.httpUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
     let sendResolve;
     let sendReject;
     const sendResult = new Promise((resolve, reject) => {
@@ -179,18 +157,8 @@ export function createStickers(app) {
       try {
         await sleep(randInt(800, 2000));
         assertSendAllowed();
-        const res = await fetch(`${httpUrl}/${action}`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            ...(cfg.snowluma?.accessToken ? { authorization: `Bearer ${cfg.snowluma.accessToken}` } : {})
-          },
-          body: JSON.stringify(params),
-          signal: AbortSignal.timeout(30000)
-        });
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok || body.status !== 'ok' || body.retcode !== 0) throw new Error(`OneBot ${action} 失败: ${body.wording || body.retcode || res.status}`);
-        sendResolve(body.data);
+        // 视频上传要久一点（video.js 传 timeoutMs）
+        sendResolve(await app.qqOut(key, segments, { origin: 'her', timeoutMs: Number(opts.timeoutMs) || 30000 }));
       } catch (error) {
         sendReject(error);
       }

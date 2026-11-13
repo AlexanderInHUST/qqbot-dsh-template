@@ -680,6 +680,24 @@ def pick(people: list[str], subjects: list[str], query: str, key: str | None = N
     return out
 
 
+def cast(subjects: list[str], key: str | None = None) -> list[dict]:
+    """画画、做视频要把这几个人画进去（2026-11-03）：每人在 `key` 里能看的那份卡（和唤醒时一样按来路过滤），
+    不像 pick 那样挑人、限张数。没有卡的人也给一条（aliases 可能有）。"""
+    cfg, now = _cfg(), time.time()
+    homes = _homes() if key else set()
+    db = all_people()
+    out = []
+    for s in subjects[:6]:
+        s = str(s)
+        if not s.startswith("qq:"):
+            s = "qq:" + s
+        p = db.get(s) or {}
+        owner = is_owner(s)
+        out.append({"subject": s, "aliases": p.get("aliases") or [], "mine": p.get("mine", ""),
+                    "card": card_for(p, key, owner, cfg, now, homes) if p else "", "owner": owner})
+    return out
+
+
 def migrate_all(complete, bot: str = "鱼妹", dry_run: bool = False) -> dict:
     """One-off: every old-style card (no items yet) split into items. Both owners first."""
     db = all_people()

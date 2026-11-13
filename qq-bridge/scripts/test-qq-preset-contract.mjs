@@ -28,10 +28,12 @@ test('reserved2 YAML resolves to the expected persona and template variables', (
 
 test('local/admin tool restrictions and existing compaction budgets stay intact', () => {
   assert.deepEqual(preset.map((row) => row.id), [
-    'persona', 'qq-persona-card', 'tool-web', 'tool-ask-user', 'tool-todo', 'qq-tool-restrict', 'compaction',
+    'persona', 'qq-persona-card', 'tool-web', 'tool-todo', 'qq-native-tools', 'qq-tool-restrict', 'compaction',
   ]);
   assert.deepEqual(preset.find((row) => row.id === 'tool-web').config, { search: false, fetch: false });
   assert.equal(preset.find((row) => row.id === 'qq-tool-restrict').name, './qq-tool-restrict.mjs');
+  // QQ 原生工具（2026-11-08）：聊天那边只管这个聊天
+  assert.deepEqual(preset.find((row) => row.id === 'qq-native-tools'), { id: 'qq-native-tools', name: './qq-native-tools.mjs', config: { side: 'chat' } });
   assert.equal(preset.find((row) => row.id === 'qq-persona-card').name, './qq-persona-card.mjs');
   const compaction = preset.find((row) => row.id === 'compaction');
   assert.deepEqual(compaction.isolate, { compaction: true, toolResultPruner: true });
@@ -111,8 +113,8 @@ test('autonomy limits and the observation escape hatch stay described', () => {
     'qq_slang_query', 'qq_slang_submit', '不重复提交',
     // 频率上限
     '普通闲聊大约 3~5 轮一张', '别连着刷', 'qq_send_sticker 一次一张，不能带文字', '不要频繁拍',
-    // 会话令牌是硬前置，漏传会被拒绝。
-    '作为 token 参数传入',
+    // 原生 QQ 工具不填 key、token；看图、看转发的还在 MCP，要填（2026-11-08）
+    '不用填 key 和 token', 'token 填提示里的【会话令牌】',
     // 指定成员唤醒
     'triggers.speakerIds', '不凭记忆乱填',
   ]) assert.ok(prefix.includes(text), `missing rule: ${text}`);

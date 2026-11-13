@@ -56,6 +56,8 @@ export function createSlang(app) {
     if (slangLearnerSessionId) {
       learnerSessions.add(slangLearnerSessionId);
       api.events.follow(slangLearnerSessionId);
+      // qqbot_agent：换备用模型 / 换回来以后也要跟着换（epoch 没变时不发请求），见 model-fallback.js
+      await ensureChatModel(slangLearnerSessionId);
       return slangLearnerSessionId;
     }
     if (saved?.sessionId && saved.preset === preset) {

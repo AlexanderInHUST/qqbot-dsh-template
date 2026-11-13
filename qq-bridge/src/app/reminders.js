@@ -112,7 +112,7 @@ export function createReminders(app) {
       const quote = r.triggered.key === key || !crossSessionCountOnlyV2(key, r.triggered.key) ? `“${defang(r.triggered.text)}”` : '（那边的原话不在这里说）';
       return `你 ${whenV2(r.at)} 在这里说好等 ${defang(w.who)}${w.words.length ? `说“${defang(w.words.join('/'))}”` : '说话'}，现在等到了：${whenV2(r.triggered.at)} ${defang(r.triggered.sender || w.who)}${there}说了${quote}。该做的事：${defang(r.note)}`;
     }
-    return `你 ${whenV2(r.at)} 在这里说好等 ${defang(w.who)}${w.words.length ? `说“${defang(w.words.join('/'))}”` : '说话'}，可一直等到现在也没等到。原来要做的：${defang(r.note)}。没等到就照实说，别编成已经等到了。`;
+    return `你 ${whenV2(r.at)} 在这里说好等 ${defang(w.who)}${w.words.length ? `说“${defang(w.words.join('/'))}”` : '说话'}，可一直等到现在也没等到。原来要做的：${defang(r.note)}。没等到就算了，事情过去了就别再提；要提也只照实说一句，别追问、别催，别编成已经等到了。`;
   }
   function remindMeV2(key, body, now = Date.now()) {
     if (!Array.isArray(socialV2.reminders)) socialV2.reminders = [];
@@ -258,20 +258,43 @@ export function createReminders(app) {
       if (remindersOfV2(key).some((r) => r.wait && Number(r.at) >= turnStart)) return null;
       st.condPromiseHintTurn = turnMark;
       log(`[提醒] ${key} 答应了要等别人做了什么再说，没安排，提示了一句：${truncateText(cond, 40)}`);
-      return `你刚说了“${truncateText(cond, 30)}”。可你只在被叫醒的时候才看得到消息，不会自己知道对方什么时候睡了、走了、回来了，也没法一直盯着谁。要兑现就用 qq_remind_me(key, token, note, waitFor=那个人（QQ 号或名字）, waitWords=要等的话（比如“晚安,睡了,去睡”）, minutes=最晚等多久)，他在哪个窗口说了这类话，这里就会叫你回来；不打算这样，就顺口改成实话（“我看到了再跟你说”“我也说不准他睡没睡”），别装作在盯着。`;
+      return `你刚说了“${truncateText(cond, 30)}”。可你只在被叫醒的时候才看得到消息，不会自己知道对方什么时候睡了、走了、回来了，也没法一直盯着谁。要兑现就用 qq_remind_me(note, waitFor=那个人（QQ 号或名字）, waitWords=要等的话（比如“晚安,睡了,去睡”）, minutes=最晚等多久)，他在哪个窗口说了这类话，这里就会叫你回来；不打算这样，就顺口改成实话（“我看到了再跟你说”“我也说不准他睡没睡”），别装作在盯着。`;
     }
     if (Number(st.promiseHintTurn) === turnMark) return null;
     // 这一轮已经安排过了（记了提醒，或者托给了去玩的自己）就不提
     if (remindersOfV2(key).some((r) => Number(r.at) >= turnStart)) return null;
     const reqs = getSocialV2State(PLAY_KEY).playRequests;
     if ((Array.isArray(reqs) ? reqs : []).some((r) => r?.from === key && Number(r.at) >= turnStart)) return null;
+    // 这一轮调了 qq_draw（“等我画一下”“画好就给你们看”）：画好了会自己发，不用提
+    if ((socialV2.drawLog || []).some((d) => d?.from === key && Number(d.at) >= turnStart)) return null;
+    if ((socialV2.videoLog || []).some((d) => d?.from === key && Number(d.at) >= turnStart)) return null;
     st.promiseHintTurn = turnMark;
     if (goDo) {
       log(`[提醒] ${key} 说了要去电脑上做的事但没托给去玩的自己，提示了一句：${truncateText(goDo, 40)}`);
-      return `你刚说了“${truncateText(goDo, 30)}”。可你说完还在这个聊天窗口里，不会真的走开去做，过一会儿又会说一遍。要真去，就用 qq_go_play(key, token, note=要做什么（比如画什么、画好把截图发回这里）, minutes) 交给去玩的你，那边做好会发回来；不打算现在去，就别说“这就去”，接着聊。`;
+      return `你刚说了“${truncateText(goDo, 30)}”。可你说完还在这个聊天窗口里，不会真的走开去做，过一会儿又会说一遍。要画画就用 qq_draw(prompt) 画，画好了会自己发出来；要去玩、去看东西，就用 qq_go_play(note=要做什么, minutes) 交给去玩的你，那边做好会发回来；不打算现在去，就别说“这就去”，接着聊。`;
     }
     log(`[提醒] ${key} 说了要回头做的事但没安排，提示了一句：${truncateText(hit, 40)}`);
-    return `你刚说了“${truncateText(hit, 30)}”。过了这一轮你不会自己记得：要回这里做的，用 qq_remind_me(key, token, note, minutes 或 at) 定个时间，到点会叫你；要在电脑上接着玩、接着看的，用 qq_go_play(key, token, note, minutes) 交给去玩的你。只是随口一说就不用管。`;
+    return `你刚说了“${truncateText(hit, 30)}”。过了这一轮你不会自己记得：要回这里做的，用 qq_remind_me(note, minutes 或 at) 定个时间，到点会叫你；要在电脑上接着玩、接着看的，用 qq_go_play(note, minutes) 交给去玩的你。只是随口一说就不用管。`;
+  }
+  // qqbot_agent：她说了“你看这个”“给你看看这张”，发的却只有字，图一张没跟上
+  // （2026-10-29 09:21 自由时间往小群发“爸爸你看这个，小肥鱼为了打游戏一直截图…”，截图、链接都没发，爸爸看不到是哪个）。
+  // 发送结果里提醒她一句；最近 3 分钟给这里发过截图、沙雕图、画（或 10 分钟内有画在画）就不提，同一处 10 分钟提一次。
+  // 聊天和自由时间都管。socialV2.promiseHint.show:false 关掉。
+  const SHOW_RE = /(?:^|[\s，,。！？!?~～]|你|你们|大家|爸爸|妈妈|快)(?:看|瞧)(?:看|一下)?这(?:个|张|图|几张|只|条|段|篇|家伙|视频)|给(?:你|你们|大家)看(?:看|一下)?这(?:个|张|图|几张)/;
+  const IMAGE_TEXT_RE = /^\[(?:截图|沙雕图|画|视频)[:：×]/;
+  const showHintAt = new Map(); // key -> ts
+  function showHintV2(key, messages, { byPlay = false } = {}, now = Date.now()) {
+    if (key === PLAY_KEY || cfg.socialV2?.promiseHint?.enabled === false || cfg.socialV2?.promiseHint?.show === false) return null;
+    const hit = messages.map((m) => String(m ?? '')).find((t) => SHOW_RE.test(t));
+    if (!hit) return null;
+    if (now - (showHintAt.get(key) || 0) < 10 * 60000) return null;
+    const since = now - 3 * 60000;
+    const recent = (getSocialV2State(key).recentMessages || []).filter((m) => m?.isSelf && Number(m.time) >= since);
+    if (recent.some((m) => IMAGE_TEXT_RE.test(String(m.text || '')) || (m.media || []).some((x) => x?.kind === 'image'))) return null;
+    if ([...(socialV2.drawLog || []), ...(socialV2.videoLog || [])].some((d) => d?.key === key && d.ok !== false && Number(d.at) >= now - 10 * 60000)) return null;
+    showHintAt.set(key, now);
+    log(`[提醒] ${key} 说了“你看这个”却没发图，提示了一句：${truncateText(hit, 40)}`);
+    return `你刚说了“${truncateText(hit, 30)}”，可发过去的只有字，对方看不到你说的是哪个。要给看就接着调 ${byPlay ? `qq_send_screenshot(to="${key}")` : 'qq_send_screenshot()'} 把那页截过去（截的是你最后用的那个标签页，不是那页就填 tabIndex）；不发图就再补一句说清楚是什么。`;
   }
   // qqbot_agent：聊天这边拿聊天浏览器陪人玩游戏（2026-10-23 技术群让她玩拍蛙蛙，她在聊天窗口里点了三十多下，
   // 两次各玩三分钟就放弃了，只在最后发了一张图）。一轮里点到 afterCalls 下，插一句让她交给自由时间的自己：
@@ -291,7 +314,7 @@ export function createReminders(app) {
     if (isNightSleepV2() && !ownerAwakeV2(key)) return;
     const st = getSocialV2State(key);
     try {
-      const accepted = await api.sessions.prompt({ sessionId, mode: 'steer', content: [{ type: 'text', text: `【交给去玩的你】${key}（令牌 ${st.agentToken}）你在聊天这边点浏览器点了好一阵了。查个东西快弄完了就接着弄完；要是在陪人玩游戏、看长东西，就别在这边玩：用 qq_go_play(key, token, note, minutes) 交给自由时间的你，那边玩得久，浏览器能按截图坐标点、拖，会中途把截图发回这里。note 写清楚玩什么（网址）、谁让你玩的；说好玩多久就填 minutes（大概 10~20）。这边跟大家说一声就行，然后接着聊。` }] });
+      const accepted = await api.sessions.prompt({ sessionId, mode: 'steer', content: [{ type: 'text', text: `【交给去玩的你】${key}（令牌 ${st.agentToken}）你在聊天这边点浏览器点了好一阵了。查个东西快弄完了就接着弄完；要是在陪人玩游戏、看长东西，就别在这边玩：用 qq_go_play(note, minutes) 交给自由时间的你，那边玩得久，浏览器能按截图坐标点、拖，会中途把截图发回这里。note 写清楚玩什么（网址）、谁让你玩的；说好玩多久就填 minutes（大概 10~20）。这边跟大家说一声就行，然后接着聊。` }] });
       if (accepted?.result?.ok) log(`[goPlay] ${key} 在聊天浏览器里点了 ${n} 下，插了一句让她交给去玩的自己`);
     } catch (error) {
       log(`[goPlay] ${key} 插话失败：${error?.message ?? error}`);
@@ -371,6 +394,7 @@ export function createReminders(app) {
       reminderWaitV2,
       reminderWhenTextV2,
       remindersOfV2,
+      showHintV2,
       turnRunningV2,
     },
     link() {

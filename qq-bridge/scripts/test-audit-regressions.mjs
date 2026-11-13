@@ -29,6 +29,7 @@ import { extractJsonArray } from '../src/slang-learner.js';
 import { sanitizeStickerText } from '../src/sticker-lib.js';
 import { createTokenLedger } from '../src/token-ledger.js';
 import { DEFAULT_PRICE_TABLE } from '../src/model-prices.js';
+import { readSocialV2State } from '../src/state-blocks.js';
 
 const CONSOLE = { 'x-console-token': 'fixture-console-token' };
 let failures = 0;
@@ -131,9 +132,8 @@ await test('R3 命中唤醒限频时安排延后重试，不丢这一枪', async
     const before = h.calls.prompts.length;
     await h.sendWakePromptV2('group:456', 'timeout');
     assert.equal(h.calls.prompts.length, before, '限频期间不得立即投递');
-    assert.ok(st.rateLimitRetryTimer, '必须安排延后重试（直接丢弃会让 timeout 唤醒永久消失）');
-    clearTimeout(st.rateLimitRetryTimer);
-    st.rateLimitRetryTimer = null;
+    assert.ok(h.scheduler.has('rate-retry:group:456'), '必须安排延后重试（直接丢弃会让 timeout 唤醒永久消失）');
+    h.scheduler.cancel('rate-retry:group:456');
   } finally { await h.close(); }
 });
 
@@ -158,9 +158,9 @@ await test('R4 timeout/replyCheck 类暂存唤醒按定时器语义补发', asyn
     const text = h.calls.prompts[0].content.map((c) => String(c?.text ?? '')).join('\n');
     assert.match(text, /你设的潜水时间到了/);
 
-    // 第二条 @ 与未读无关但对应消息已被处理 → 仍然按消息语义跳过
-    const second = h.replayPendingWakeReasonsV2('group:456');
-    assert.equal(second?.action, 'skipped', '已被当前回合处理的消息类唤醒仍然跳过');
+    // 第二条 @ 对应的消息已被处理 → 同一次里按消息语义跳过，队列清空
+    assert.equal(st.pendingWakeReasons.length, 0, '一次过完整个队列');
+    assert.equal(h.replayPendingWakeReasonsV2('group:456'), null);
   } finally { await h.close(); }
 });
 
@@ -250,7 +250,7 @@ await test('R8 wake-config 丢弃未知 triggers 键（不落盘、不回传模�
       assert.equal(st.wakeConfig.triggers.junkKey, undefined, '内存态不得被污染');
       assert.equal(st.wakeConfig.triggers.atMention, true, '已知字段仍需生效');
       h.flushSocialV2State();
-      const file = JSON.parse(fs.readFileSync(path.join(h.temp, 'state', 'social-v2.json'), 'utf8'));
+      const file = readSocialV2State(path.join(h.temp, 'state', 'social-v2.json')).raw;
       assert.equal(file.conversations['group:456'].wakeConfig.triggers.junkKey, undefined, '落盘文件不得含垃圾键');
     });
   } finally { await h.close(); }

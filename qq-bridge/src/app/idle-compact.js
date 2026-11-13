@@ -3,7 +3,7 @@
 
 export function createIdleCompact(app) {
   const {
-    api, cfg, compactingKeys, idleCompactTimers, log, sessionContextTokens
+    api, cfg, compactingKeys, log, sessionContextTokens
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let getSocialV2State, isConversationBusyV2, replayPendingWakeReasonsV2;
@@ -27,10 +27,10 @@ export function createIdleCompact(app) {
   }
   const idleCompactLastAt = new Map(); // key -> 上次闲时压缩完成的时间
 
+  // 到点的压缩登记在定时里，名字 idle-compact:<key>（2026-11-08 以前是一个 setTimeout 的 Map）
+  const idleJobV2 = (key) => `idle-compact:${key}`;
   function cancelIdleCompactV2(key) {
-    const t = idleCompactTimers.get(key);
-    if (t) clearTimeout(t);
-    idleCompactTimers.delete(key);
+    app.scheduler.cancel(idleJobV2(key));
   }
 
   function scheduleIdleCompactV2(key) {
@@ -44,12 +44,9 @@ export function createIdleCompact(app) {
     const last = idleCompactLastAt.get(key) || 0;
     const wait = Math.max(ic.idleMs, last ? last + ic.minIntervalMs - Date.now() : 0);
     if (wait > ic.idleMs) log(`[reserved2] ${key} 闲时压缩：${Math.round((Date.now() - last) / 60000)} 分钟前刚压过，推到 ${Math.round(wait / 60000)} 分钟后`);
-    const timer = setTimeout(() => {
-      idleCompactTimers.delete(key);
+    app.scheduler.after(idleJobV2(key), wait, () => {
       void runIdleCompactV2(key).catch((error) => log(`[reserved2] ${key} 闲时压缩异常：${error?.message ?? error}`));
-    }, wait);
-    timer.unref?.();
-    idleCompactTimers.set(key, timer);
+    });
   }
 
   async function runIdleCompactV2(key) {
@@ -60,7 +57,8 @@ export function createIdleCompact(app) {
     const tokens = sessionContextTokens.get(sid) ?? 0;
     if (tokens < ic.minContextTokens) return;
     const last = idleCompactLastAt.get(key) || 0;
-    if (last && Date.now() - last < ic.minIntervalMs) return;
+    // 推迟的定时器可能比 Date.now() 早一两毫秒到点（11-04 12:29 那次多半就是这样悄悄没压，下午涨到 31 万 token 才在聊天中途压）：没到就重新排，别直接放弃
+    if (last && Date.now() - last < ic.minIntervalMs) { scheduleIdleCompactV2(key); return; }
     // 她又在忙了：等这一轮结束时会重新排一次
     if (isConversationBusyV2(key, st)) return;
     compactingKeys.add(key);

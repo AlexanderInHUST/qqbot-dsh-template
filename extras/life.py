@@ -3,7 +3,8 @@
   The bridge keeps the mood, lets it fade, and couples it to behaviour; nothing here is stored.
 - threads: things she is in the middle of (a show she follows, a game she hasn't beaten, a question
   she wants to look up), extracted after each free-time session; untouched ones fade after a week.
-- plan: in the morning, 1-3 small things she feels like doing today.
+- plan: in the morning, 1-3 small things she feels like doing today, and which of them she has done
+  (progress is kept here too since 2026-11-09; the bridge only caches what /life gives it).
 - diary: at bedtime, a few first-person sentences about the day; the next day sees yesterday's.
 - think: "I just remembered…" — candidate things to bring up with someone, each scored 1-5 on a few
   dimensions (after Inner Thoughts, CHI 2025); the bridge compares the score with its threshold.
@@ -25,7 +26,9 @@ _TECH_RE = re.compile(r"(?i)bridge|dsh|prompt|token|模型|提示词|后台|管�
 
 
 def _cfg() -> dict:
-    return {"threadMax": 5, "threadFadeDays": 7, "diaryKeep": 30, "planKeep": 14,
+    # diaryKeep / planKeep：留几天，0 = 一直留（2026-11-10 起默认一直留：她小时候的日记和计划，以后要能翻；
+    # 以前计划只留 14 天，10-24~10-27 的已经没了）
+    return {"threadMax": 5, "threadFadeDays": 7, "diaryKeep": 0, "planKeep": 0,
             "moodEffort": "low", "effort": "high", "persona": "元气满满、爱玩爱闹、偶尔装小大人的小孩",
             "silenceBoostMax": 0.5, "silenceBoostHours": 12, "otherPenalty": 0.5,
             **extras_config().get("life", {})}
@@ -117,8 +120,10 @@ THREADS_PROMPT = (
     "更新她“正在做的事”清单：只留她下次真的会想接着做的（追着看的番或 UP 主、没打通的游戏、看到一半的系列、"
     "想查明白的问题、想给谁找的东西）；看完就完了的一次性东西不算。这次接着做了的旧事标 touched；"
     "她明显做完了或不想做了的标 done。新冒出来的给空 id。最多 {max} 件，没有就是空数组。"
-    "title 不超过 20 字，next 写下次接着做什么，不超过 40 字；都不写分数、编号、播放量这些数字。\n"
-    '只输出 JSON：{{"threads": [{{"id": "旧编号或空", "title": "...", "next": "...", "touched": true, "done": false}}]}}'
+    "title 不超过 20 字，next 写下次接着做什么，不超过 40 字；这两个都不写分数、编号、播放量这些数字。\n"
+    "游戏类的再写 best：她到现在玩得最好的一次（合出过多大的块、过到第几关，可以写数字和几月几号），不超过 30 字；"
+    "旧的 best 要一直留着，这次比它好才改成这次的，没比它好就照抄旧的；不是游戏、或者不知道的留空。\n"
+    '只输出 JSON：{{"threads": [{{"id": "旧编号或空", "title": "...", "next": "...", "best": "", "touched": true, "done": false}}]}}'
 )
 
 
@@ -136,11 +141,13 @@ def update_threads(body: dict, complete, bot: str = "鱼妹", now: float | None 
     with LOCK:
         db = _load()
         old = _live_threads(db, cfg, now)
-    old_text = "\n".join(f"- [{t['id']}] {t['title']}：{t['next']}" for t in old) or "（没有）"
+    old_text = "\n".join(f"- [{t['id']}] {t['title']}：{t['next']}" + (f"（最好的一次：{t['best']}）" if t.get("best") else "")
+                         for t in old) or "（没有）"
     prompt = THREADS_PROMPT.format(bot=bot, old=old_text, items=_lines(body.get("items"), 30),
                                    notes=_lines(notes, 20), say=" ".join(str(body.get("say") or "（没说）").split())[:300],
                                    max=int(cfg["threadMax"]))
-    obj = _json_obj(complete(prompt, 16384, effort=cfg["effort"]))
+    # 128k：推理也算在 max_tokens 里，16384 时 high 常常想满额度、正文是空的（10-25~11-01 失败 7 回，finish_reason=length）
+    obj = _json_obj(complete(prompt, 131072, effort=cfg["effort"]))
     rows = obj.get("threads") if isinstance(obj.get("threads"), list) else []
     with LOCK:
         db = _load()
@@ -152,17 +159,18 @@ def update_threads(body: dict, complete, bot: str = "鱼妹", now: float | None 
             if tid in live and r.get("done"):
                 live.pop(tid)
                 continue
-            title, nxt = _clean(r.get("title"), 20), _clean(r.get("next"), 40)
+            title, nxt, best = _clean(r.get("title"), 20), _clean(r.get("next"), 40), _clean(r.get("best"), 30)
             if not title or r.get("done"):
                 continue
             if tid in live:
                 t = live[tid]
-                t.update(title=title, next=nxt or t.get("next", ""))
+                # 最好成绩只在模型给了新的时候换，漏写不算清空（11-07 她不记得 11-02 合出过 256）
+                t.update(title=title, next=nxt or t.get("next", ""), best=best or t.get("best", ""))
                 if r.get("touched"):
                     t["updated"] = now
             else:
                 tid = uuid.uuid4().hex[:6]
-                live[tid] = {"id": tid, "title": title, "next": nxt, "created": now, "updated": now}
+                live[tid] = {"id": tid, "title": title, "next": nxt, "best": best, "created": now, "updated": now}
         db["threads"] = sorted(live.values(), key=lambda t: -float(t["updated"]))[: int(cfg["threadMax"])]
         save_json(PATH, db)
         return {"ok": True, "threads": db["threads"]}
@@ -191,15 +199,28 @@ PROGRESS_PROMPT = (
 )
 
 
-def plan_progress(body: dict, complete, bot: str = "鱼妹") -> dict:
-    """Which of today's plan items she has actually done (bridge keeps the result; nothing stored here)."""
+def plan_progress(body: dict, complete, bot: str = "鱼妹", now: float | None = None) -> dict:
+    """Which of today's plan items she has actually done. With body.date the open items come from the stored
+    plan and the result is merged into it (done wins; a second "some" keeps the first wording); the reply
+    carries the whole plan. Without a date (old bridge) it only judges the items it was given."""
     cfg = _cfg()
+    now = now or time.time()
+    date = str(body.get("date") or "")
+    stored = None
     items = []
-    for x in (body.get("items") or [])[:3]:
-        if isinstance(x, dict) and str(x.get("text") or "").strip():
-            items.append((_int(x.get("i"), 0, 2), " ".join(str(x["text"]).split())[:30]))
+    if date:
+        with LOCK:
+            stored = _load()["plans"].get(date)
+        if not stored:
+            return {"ok": True, "progress": [], "plan": None}
+        done = stored.get("progress") or {}
+        items = [(i, t) for i, t in enumerate(stored.get("items") or []) if (done.get(str(i)) or {}).get("status") != "done"]
+    else:
+        for x in (body.get("items") or [])[:3]:
+            if isinstance(x, dict) and str(x.get("text") or "").strip():
+                items.append((_int(x.get("i"), 0, 2), " ".join(str(x["text"]).split())[:30]))
     if not items or not (body.get("lines") or body.get("play")):
-        return {"ok": True, "progress": []}
+        return {"ok": True, "progress": [], **({"plan": stored} if date else {})}
     prompt = PROGRESS_PROMPT.format(
         bot=bot, items="\n".join(f"{i}. {t}" for i, t in items), place=str(body.get("place") or "聊天里")[:40],
         lines=_lines(body.get("lines"), 30, 160), play=_lines(body.get("play"), 40))
@@ -212,7 +233,25 @@ def plan_progress(body: dict, complete, bot: str = "鱼妹") -> dict:
         i = _int(r.get("i"), -99, 99, -1)  # 不夹到范围里：编错的号不能落到别的事上
         if i in known and (i not in out or r["status"] == "done"):
             out[i] = {"i": i, "status": r["status"], "how": _clean(r.get("how"), 20)}
-    return {"ok": True, "progress": sorted(out.values(), key=lambda x: x["i"])}
+    if not date:
+        return {"ok": True, "progress": sorted(out.values(), key=lambda x: x["i"])}
+    changed = []
+    with LOCK:
+        db = _load()
+        plan = db["plans"].get(date)
+        if not plan or plan.get("items") != stored.get("items"):  # 等的时候重想了一份
+            return {"ok": True, "progress": [], "plan": plan}
+        progress = plan.setdefault("progress", {})
+        for r in sorted(out.values(), key=lambda x: x["i"]):
+            prev = progress.get(str(r["i"])) or {}
+            if prev.get("status") == "done" or (prev.get("status") == "some" and r["status"] == "some"):
+                continue
+            progress[str(r["i"])] = {"status": r["status"], "how": r["how"], "at": now,
+                                     "key": str(body.get("key") or "")[:40]}
+            changed.append(r)
+        if changed:
+            save_json(PATH, db)
+    return {"ok": True, "progress": changed, "plan": plan}
 
 
 DIARY_PROMPT = (
@@ -238,13 +277,14 @@ def _owner_recent() -> str:
     return "\n".join(out) or "（不知道）"
 
 
-def view(now: float | None = None) -> dict:
-    """What the bridge shows: live threads, today's plan, the latest diary."""
+def view(now: float | None = None, date: str | None = None) -> dict:
+    """What the bridge shows: live threads, the plan for `date` (her day runs from waking up, so the bridge
+    says which day it means; default the calendar day) with its progress, the latest diary."""
     cfg = _cfg()
     now = now or time.time()
     with LOCK:
         db = _load()
-    today = time.strftime("%Y-%m-%d", time.localtime(now))
+    today = date if date and re.fullmatch(r"\d{4}-\d{2}-\d{2}", date) else time.strftime("%Y-%m-%d", time.localtime(now))
     return {"ok": True, "threads": _live_threads(db, cfg, now), "plan": db["plans"].get(today),
             "diary": db["diaries"][-1] if db["diaries"] else None, "today": today}
 
@@ -272,8 +312,9 @@ def make_plan(body: dict, complete, bot: str = "鱼妹", now: float | None = Non
     with LOCK:
         db = _load()
         db["plans"][date] = plan
-        for d in sorted(db["plans"])[: max(0, len(db["plans"]) - int(cfg["planKeep"]))]:
-            db["plans"].pop(d, None)
+        if int(cfg["planKeep"]) > 0:
+            for d in sorted(db["plans"])[: max(0, len(db["plans"]) - int(cfg["planKeep"]))]:
+                db["plans"].pop(d, None)
         save_json(PATH, db)
     return {"ok": True, "plan": plan}
 
@@ -304,7 +345,8 @@ def write_diary(body: dict, complete, bot: str = "鱼妹", now: float | None = N
     with LOCK:
         db = _load()
         db["diaries"] = [d for d in db["diaries"] if d.get("date") != date] + [diary]
-        db["diaries"] = db["diaries"][-int(cfg["diaryKeep"]):]
+        if int(cfg["diaryKeep"]) > 0:
+            db["diaries"] = db["diaries"][-int(cfg["diaryKeep"]):]
         save_json(PATH, db)
     return {"ok": True, "diary": diary}
 
@@ -317,13 +359,18 @@ THINK_PROMPT = (
     "下面是她可以去找的人或群，以及她知道的情况：\n{targets}\n\n"
     "为每个人/群想 0~2 个具体的念头：兑现答应过的事、分享刚看到的和对方有关的东西、关心对方提过的事有没有后续、"
     "接着上次没聊完的话。没有就不要硬想；空泛的“问问在干嘛”“好无聊找人聊天”不算，刚刚聊过的不算。"
+    "她问过、催过、对方没接或者岔开了的事不算（对方多半在忙或不想说），不要想成再问一次、再催一句、换个说法接着问。"
     "念头只能用上面材料里真有的事：材料里看不到她做过的（画画、玩游戏、看完了什么），不能想成“画好啦给你们看”“我玩通关了”，"
     "答应了还没做的就想成“想起答应过…还没弄”：比如答应画画但材料里看不到画过，就是“想起答应画…还没画”，"
     "不能说“那张图”“把画发过去”“画好先给你们看”，好像画已经有了。\n"
     "每个念头按 1~5 打分：relevance（和对方、和你们的关系有多相关）、info_gap（对方会想知道，或者她真想知道答案）、"
     "urgency（有没有时效，比如答应了今天做）、coherence（接得上之前聊的，不突兀）、originality（不是刚说过的、不重复）、"
     "impact（说了对方大概会愿意接）。kind 是 promise / share / care / continue / other。thought 是她心里想的，不超过 40 字。\n"
-    '只输出 JSON：{{"thoughts": [{{"key": "会话 key", "thought": "...", "kind": "...", "scores": {{"relevance": 3, "info_gap": 3, "urgency": 2, "coherence": 3, "originality": 3, "impact": 3}}}}]}}'
+    "标着【白天只说大事】的地方，平常的事都留到睡前，只想她忍不住马上就想告诉家里人的大事："
+    "材料里真有的、她自己特别得意的作品，卡了好久的游戏终于过了，她心里难受、在别的群里受了委屈（心情里看得出来）。"
+    "这种念头 big 写 true；普通的见闻、好玩的东西、关心问候、接着上次聊，在那里都不想。别的地方 big 一律写 false。"
+    "大事很少，大多数时候一个也没有。\n"
+    '只输出 JSON：{{"thoughts": [{{"key": "会话 key", "thought": "...", "kind": "...", "big": false, "scores": {{"relevance": 3, "info_gap": 3, "urgency": 2, "coherence": 3, "originality": 3, "impact": 3}}}}]}}'
 )
 
 
@@ -331,6 +378,8 @@ def _target_text(t: dict) -> str:
     key = str(t.get("key") or "")
     head = f"- {key}（{str(t.get('label') or '')[:30]}，那边已经安静了 {int(t.get('silenceMinutes') or 0)} 分钟）"
     facts = [f"  注意：{' '.join(str(t['note']).split())[:80]}"] if t.get("note") else []
+    if t.get("bigOnly"):  # 2026-11-10 大事随时说，小事睡前说
+        head += "【白天只说大事】"
     if key.startswith("private:"):
         subject = f"qq:{key[8:]}"
         import people
@@ -365,6 +414,7 @@ def think(body: dict, complete, bot: str = "鱼妹", now: float | None = None) -
         targets="\n\n".join(_target_text(t) for t in targets))
     obj = _json_obj(complete(prompt, 32768, effort=cfg["effort"]))
     silence = {str(t["key"]): float(t.get("silenceMinutes") or 0) for t in targets}
+    big_only = {str(t["key"]) for t in targets if t.get("bigOnly")}
     out = []
     for r in (obj.get("thoughts") or [])[:12]:
         if not isinstance(r, dict) or str(r.get("key")) not in silence:
@@ -375,7 +425,10 @@ def think(body: dict, complete, bot: str = "鱼妹", now: float | None = None) -
         scores = r.get("scores") if isinstance(r.get("scores"), dict) else {}
         s = {k: _int(scores.get(k), 1, 5, 1) for k in SCORE_KEYS}
         kind = str(r.get("kind") or "other") if str(r.get("kind")) in KINDS else "other"
-        out.append({"key": str(r["key"]), "thought": thought, "kind": kind, "scores": s,
+        big = r.get("big") is True and str(r["key"]) in big_only
+        if str(r["key"]) in big_only and not big:
+            continue  # 白天只说大事的地方，平常的念头不要
+        out.append({"key": str(r["key"]), "thought": thought, "kind": kind, "scores": s, "big": big,
                     "score": score_thought(s, kind, silence[str(r["key"])], cfg)})
     out.sort(key=lambda x: -x["score"])
     return {"ok": True, "thoughts": out}

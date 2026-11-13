@@ -81,7 +81,7 @@ export function createWake(app) {
       return;
     }
     // 唤醒频率硬限制：超限则**延后重试**，不能直接丢弃。直接 return 的后果：
-    //   · timeout 唤醒时 setupSleepTimerV2 已经清空 sleepTimer，丢弃后这个会话会停在
+    //   · timeout 唤醒时 sleep 定时已经摘掉，丢弃后这个会话会停在
     //     「infinite=false、sleepUntil 已过期、没有任何定时器」的静默态，除非重启或
     //     主动机会兜底（默认 30~90 分钟）才可能恢复；
     //   · @/提问被丢弃则要等下一条消息才可能再唤醒。
@@ -103,9 +103,8 @@ export function createWake(app) {
       }
       // 每次只等一小段（最长 60s）：小时级限频不会一次性睡满一小时而错过中途可用的窗口。
       const waitMs = Math.min(60000, Math.max(1000, Math.round(retryAfterMs) || 5000));
-      if (!st.rateLimitRetryTimer) {
-        st.rateLimitRetryTimer = setTimeout(() => {
-          st.rateLimitRetryTimer = null;
+      if (!app.scheduler.has(`rate-retry:${key}`)) {
+        app.scheduler.after(`rate-retry:${key}`, waitMs, () => {
           // 消息类原因在重试前再确认一次：等待窗口里消息可能已被别的回合处理掉，
           // 没必要为一条已经处理过的消息再唤醒一次（定时器类原因与未读无关，不检查）。
           if (!isTimerWakeReason(reason) && !(Array.isArray(st.unread) && st.unread.length > 0)) {
@@ -113,8 +112,7 @@ export function createWake(app) {
             return;
           }
           void sendWakePromptV2(key, reason).catch((error) => log(`[reserved2] 限频重试唤醒异常 ${key}:`, error?.message ?? error));
-        }, waitMs);
-        st.rateLimitRetryTimer.unref?.();
+        });
       }
       log(`[reserved2] 唤醒频率超限，${Math.round(waitMs / 1000)}s 后重试 ${key}（${reason}）`);
       return;
@@ -127,10 +125,7 @@ export function createWake(app) {
     // 无论提前唤醒还是超时唤醒，都清理有限潜水定时器与 sleepUntil，避免状态残留/重复唤醒
     const prevSleepUntil = st.wakeConfig.sleepUntil;
     const hadFiniteSleep = !st.wakeConfig.infinite && !!prevSleepUntil && Number.isFinite(Date.parse(prevSleepUntil));
-    if (st.sleepTimer) {
-      clearTimeout(st.sleepTimer);
-      st.sleepTimer = null;
-    }
+    cancelSleepTimerV2(key);
     st.wakeConfig.sleepUntil = null;
     st.wakeConfig.lastWakeAt = now;
     st.wakeConfig.wakeCount = (st.wakeConfig.wakeCount || 0) + 1;
@@ -232,6 +227,8 @@ export function createWake(app) {
     anyMessage: 50,
     replyGate: 42,
     reminder: 32,
+    draw: 31,
+    video: 31,
     timeout: 30,
     initiate: 25,
     proactiveCheck: 20
@@ -246,7 +243,7 @@ export function createWake(app) {
   // 与「未读消息」无关的唤醒原因（定时器/引导）。这些原因在会话繁忙时被暂存后，
   // 不能用「unread 里还有没有对应 seq」来判断是否还要补发 —— 那一轮很可能已经把
   // 未读全部标读了，结果就是 timeout 定时器被静默丢掉、会话停在无定时器的静默态。
-  const TIMER_WAKE_REASONS = new Set(['timeout', 'proactiveCheck', 'goPlay', 'bootstrap', 'admin', 'initiate', 'reminder']);
+  const TIMER_WAKE_REASONS = new Set(['timeout', 'proactiveCheck', 'goPlay', 'bootstrap', 'admin', 'initiate', 'reminder', 'draw', 'video']);
   function isTimerWakeReason(reason) {
     return TIMER_WAKE_REASONS.has(String(reason ?? '').split(':')[0]);
   }
@@ -280,10 +277,7 @@ export function createWake(app) {
       log(`[reserved2] 会话繁忙，暂存唤醒原因 ${key}（${reason}@seq${seq}，原因=${busyReasonV2(key, st)}）`);
       return;
     }
-    if (st.sleepTimer) {
-      clearTimeout(st.sleepTimer);
-      st.sleepTimer = null;
-    }
+    cancelSleepTimerV2(key);
     st.pendingWakeReason = reason;
     // 合并窗口以全局配置为准：每个会话的 wakeConfig 里存着创建时的旧值，改配置要能直接生效。
     let batchMs = Math.max(1000, Number(cfg.socialV2?.wake?.batchWindowMs) || Number(st.wakeConfig?.batchWindowMs) || 8000);
@@ -328,14 +322,31 @@ export function createWake(app) {
    * 两类原因必须分开处理：
    *   · 消息类（@/关键词/提问/私聊/拍一拍…）只有在那条消息还没被本回合处理掉时才补发
    *     （它的 seq 还在已展示水位 readThroughSeqV2 之后）；
-   *   · 定时器类（timeout/proactiveCheck/bootstrap/admin/initiate/reminder）与未读水位无关：
+   *   · 定时器类（timeout/proactiveCheck/bootstrap/admin/initiate/reminder/draw）与未读水位无关：
    *     那一轮很可能已经把未读全部标读，用 unread 判断会让「到点唤醒」被静默吞掉 ——
-   *     timeout 时 sleepTimer 已被清空，结果是会话停在「sleepUntil 已过期、无任何定时器」。
+   *     timeout 时 sleep 定时已经摘掉，结果是会话停在「sleepUntil 已过期、无任何定时器」。
    */
+  // qqbot_agent：整个队列过一遍。以前一次只取队头一条，队头已处理过被跳过，后面没展示过的 @ 就留在队列里，
+  // 要等下一回合结束才补：2026-10-28 08:43 群 1000000004 有人 @ 她，她正忙，回合结束时只看了队头的 talkBack，
+  // 那条 @ 干等到 08:45 别人又说话才被顺带叫醒。补发的几条消息类唤醒会并进同一次计划唤醒（按优先级取最终原因）。
+  // 返回第一条补发/定时器类的结果，都跳过了就返回最后一条跳过的。
   function replayPendingWakeReasonsV2(key) {
     const st = getSocialV2State(key);
     if (!Array.isArray(st.pendingWakeReasons) || !st.pendingWakeReasons.length) return null;
-    const item = st.pendingWakeReasons.shift();
+    let first = null;
+    let skipped = null;
+    // 先整个拿出来：会话还忙着时补发会再塞回队列，边取边塞会转不停
+    const items = st.pendingWakeReasons.splice(0);
+    for (const item of items) {
+      const r = replayOnePendingWakeV2(key, st, item);
+      if (!r) continue;
+      if (r.action === 'skipped') skipped = r;
+      else if (!first) first = r;
+    }
+    return first || skipped;
+  }
+
+  function replayOnePendingWakeV2(key, st, item) {
     if (!item || typeof item !== 'object') return null;
     if (isTimerWakeReason(item.reason)) {
       if (item.reason === 'timeout') {
@@ -346,6 +357,8 @@ export function createWake(app) {
         log(`[reserved2] ${key} 繁忙期间的主动机会已过期，跳过补发`);
       } else if (item.reason === 'reminder' && !dueRemindersV2(key).length) {
         log(`[提醒] ${key} 到点的事这一轮里已经看到了，跳过补发`);
+      } else if (app.jobKindOfWakeReasonV2(item.reason) && !app.notesOfV2(key, app.jobKindOfWakeReasonV2(item.reason)).length) {
+        log(`[reserved2] ${key} 没做成的${item.reason}这一轮里已经知道了，跳过补发`);
       } else {
         log(`[reserved2] ${key} 补发繁忙期间积压的唤醒：${item.reason}`);
         scheduleWakeV2(key, item.reason);
@@ -365,56 +378,34 @@ export function createWake(app) {
     return { reason: item.reason, action: 'skipped' };
   }
 
+  // 潜水到期：定时里的 sleep:<key>（2026-11-08 以前是每个会话一个 setTimeout，超过 100 秒的分段续期）
+  const sleepJobV2 = (key) => `sleep:${key}`;
+  function cancelSleepTimerV2(key) {
+    if (key) app.scheduler.cancel(sleepJobV2(key));
+  }
+
   function setupSleepTimerV2(key) {
     if (cfg.socialV2?.enabled === false) return;
     if (!isSessionAllowedInCurrentMode(key)) return;
     const st = getSocialV2State(key);
-    if (st.sleepTimer) {
-      clearTimeout(st.sleepTimer);
-      st.sleepTimer = null;
-    }
+    cancelSleepTimerV2(key);
     if (socialV2.paused) return;
     const wc = st.wakeConfig;
     if (!wc || wc.infinite || !wc.sleepUntil) return;
     const until = Date.parse(wc.sleepUntil);
     if (!Number.isFinite(until)) return;
+    const wake = () => void sendWakePromptV2(key, 'timeout').catch((error) => log(`[reserved2] 睡眠到期唤醒异常 ${key}:`, error?.message ?? error));
     const delay = until - Date.now();
     if (delay <= 0) {
-      void sendWakePromptV2(key, 'timeout').catch((error) => log(`[reserved2] 睡眠到期唤醒异常 ${key}:`, error?.message ?? error));
+      wake();
       return;
     }
-    // Node setTimeout 超过 2^31-1ms 会按 1ms 触发；远未来定时器先等一小段后重新续期，
-    // 而不是提前唤醒。这里刻意用 100 秒级的小步长（而不是 24 天的上限）：
-    // 每次续期都会用 Date.now() 重新算剩余时间，系统时钟被校正/跳变时能很快纠正过来。
-    const MAX_TIMEOUT_MS = 100009;
-    if (delay > MAX_TIMEOUT_MS) {
-      st.sleepTimer = setTimeout(() => {
-        st.sleepTimer = null;
-        setupSleepTimerV2(key);
-      }, MAX_TIMEOUT_MS);
-      st.sleepTimer.unref?.();
-      log(`[reserved2] 设置远未来有限潜水定时器 ${key}，首段 ${Math.round(MAX_TIMEOUT_MS / 1000)} 秒后续期`);
-      return;
-    }
-    st.sleepTimer = setTimeout(() => {
-      st.sleepTimer = null;
-      void sendWakePromptV2(key, 'timeout').catch((error) => log(`[reserved2] 睡眠到期唤醒异常 ${key}:`, error?.message ?? error));
-    }, delay);
-    st.sleepTimer.unref?.();
+    app.scheduler.at(sleepJobV2(key), until, wake);
     log(`[reserved2] 设置有限潜水定时器 ${key}，剩余 ${Math.round(delay / 1000)}s`);
   }
 
-  function cancelProactiveCheckV2(key) {
-    const st = socialV2.conversations.get(key);
-    if (!st || !st.proactiveTimer) return;
-    clearTimeout(st.proactiveTimer);
-    st.proactiveTimer = null;
-  }
-
   // qqbot_agent：自由时间是全局的——她只有一个人，不会同时在两个会话里各玩各的。
-  // 每个会话仍各有一个计时器（沿用原有的启停逻辑），但真正的“检查”全局共用一个节奏：
-  // 某个计时器到点时，如果离上次全局检查还没到随机间隔就直接跳过；到了就从所有空闲的会话里随机挑一个
-  // 去过自由时间（她在哪个会话里玩，想分享时就分享到哪里）。
+  // 定时里一个 free-time-check 每分钟看一眼，到了 socialV2.proactiveNextAt 才真的检查（2026-11-08 以前是每个会话各一个 setTimeout）。
   // 下次检查时间存在 socialV2.proactiveNextAt（写进 social-v2.json），重启后接着用。
   function proactiveIntervalV2() {
     const p = cfg.socialV2?.proactive ?? {};
@@ -458,21 +449,20 @@ export function createWake(app) {
     if (go) void sendWakePromptV2(PLAY_KEY, 'proactiveCheck').catch((error) => log(`[reserved2] proactive 唤醒异常 ${PLAY_KEY}:`, error?.message ?? error));
   }
 
+  function freeTimeTickV2() {
+    if (cfg.socialV2?.proactive?.enabled === false) return;
+    if (socialV2.paused || app.currentMode !== 'reserved2') return;
+    if (!socialV2.proactiveNextAt) socialV2.proactiveNextAt = Date.now() + proactiveIntervalV2();
+    runGlobalProactiveCheckV2();
+  }
+
+  // 名字沿用以前的（各处在会话出现、模式切换时调它）；现在只是确保全局的 free-time-check 登记着
   function scheduleProactiveCheckV2(key) {
     if (cfg.socialV2?.proactive?.enabled === false) return;
     if (socialV2.paused || app.currentMode !== 'reserved2') return;
     if (!isSessionAllowedInCurrentMode(key)) return;
-    const st = getSocialV2State(key);
-    if (st.proactiveTimer) return;
     if (!socialV2.proactiveNextAt) socialV2.proactiveNextAt = Date.now() + proactiveIntervalV2();
-    // 每个会话的计时器只负责“到点去看一眼全局节奏”，几分钟一次即可
-    const delay = Math.max(60 * 1000, Math.min(10 * 60 * 1000, socialV2.proactiveNextAt - Date.now() + Math.floor(Math.random() * 60 * 1000)));
-    st.proactiveTimer = setTimeout(() => {
-      st.proactiveTimer = null;
-      try { runGlobalProactiveCheckV2(); } catch (error) { log(`[reserved2] 自由时间检查异常:`, error?.message ?? error); }
-      scheduleProactiveCheckV2(key);
-    }, delay);
-    st.proactiveTimer.unref?.();
+    if (!app.scheduler.has('free-time-check')) app.scheduler.every('free-time-check', 60 * 1000, freeTimeTickV2);
   }
 
   function clearSocialV2Timers(key) {
@@ -483,27 +473,18 @@ export function createWake(app) {
       st.pendingWakeTimer = null;
     }
     st.pendingWakeReason = null;
-    if (st.sleepTimer) {
-      clearTimeout(st.sleepTimer);
-      st.sleepTimer = null;
-    }
+    cancelSleepTimerV2(key);
     if (st.gateTimer) {
       clearTimeout(st.gateTimer);
       st.gateTimer = null;
     }
-    if (st.proactiveTimer) {
-      clearTimeout(st.proactiveTimer);
-      st.proactiveTimer = null;
-    }
-    if (st.rateLimitRetryTimer) {
-      clearTimeout(st.rateLimitRetryTimer);
-      st.rateLimitRetryTimer = null;
-    }
+    app.scheduler.cancel(`rate-retry:${key}`);
     if (Array.isArray(st.pendingWakeReasons)) st.pendingWakeReasons.length = 0;
   }
 
   function clearAllSocialV2Timers() {
     for (const key of socialV2.conversations.keys()) clearSocialV2Timers(key);
+    app.scheduler.cancel('free-time-check');
     pendingWakeKeys.clear();
     wakeConfigUpdatedKeys.clear();
     markReadCalledKeys.clear();
@@ -513,6 +494,7 @@ export function createWake(app) {
 
   return {
     exports: {
+      cancelSleepTimerV2,
       clearAllSocialV2Timers,
       clearSocialV2Timers,
       isConversationBusyV2,

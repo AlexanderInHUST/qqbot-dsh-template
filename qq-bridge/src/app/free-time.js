@@ -2,14 +2,15 @@
 // 2026-10-24 从 bridge.js 的 main() 里拆出来，代码原样搬过来的；用到的别处的东西都从 app 拿（见 bridge.js 里“装配拆出去的模块”）。
 import { activities as freeTimeActivities, activityOf, ideasText, pickActivities, varietyHint } from '../free-time.js';
 import { activityMultipliers } from '../inner-life.js';
+import { noReachOut } from '../privacy-policy.js';
 
 export function createFreeTime(app) {
   const {
     PLAY_KEY, api, cfg, log
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
-  let PLAY_SESSIONS_KEEP_MS, PLAY_SESSIONS_MAX, convLabelV2, whenV2, isConversationBusyV2,
-    isNightSleepV2, lifeCfgV2, moodEngineCfgV2, playHoldV2, replyOnlyGroupV2, saveSocialV2State, socialV2;
+  let PLAY_SESSIONS_KEEP_MS, PLAY_SESSIONS_MAX, convLabelV2, extrasGetV2, whenV2, isConversationBusyV2,
+    isNightSleepV2, lifeCfgV2, moodEngineCfgV2, playHoldV2, replyOnlyGroupV2, saveSocialV2State, sleepStateV2, socialV2;
 
   // qqbot_agent：自由时间（主动机会唤醒）。只要这段时间里没人来找、她也没发言，就算还在“自己玩”。
   const FREE_TIME_REASONS = new Set(['proactiveCheck', 'goPlay']);
@@ -302,9 +303,31 @@ export function createFreeTime(app) {
     }
   }
 
-  // 记下看过的视频（不管是不是自由时间），只留最近 socialV2.proactive.watchedVideos 个（默认 20）
-  // 分工（2026-10-24 定）：“看没看过”以 extras /data/bili-watched.json 为准（500 个，bili_watch 自己拦重看）；
-  // 这里只是给唤醒提示列一行“最近看过的”用的小缓存，唤醒提示是同步拼的，不去问 extras。
+  // 最近看过的视频，自由时间提示里列一行（socialV2.proactive.watchedVideos 个，默认 20）。
+  // 原件是 extras /data/bili-watched.json（500 个，bili_watch 看完自己记、自己拦 14 天内重看）；
+  // 这里只是缓存，不存盘（2026-11-09 架构调整第 7 步，以前存在 socialV2.watchedVideos）：每 10 分钟拉一次 GET /bili/watched，
+  // 她刚看完的从工具结果里先补上，不等下一次拉。
+  const watchedCache = { list: [], at: 0 };
+  const watchedKeepV2 = () => Math.max(0, Math.min(100, Math.floor(Number(cfg.socialV2?.proactive?.watchedVideos ?? 20))));
+  let watchedInFlight = null;
+  function refreshWatchedVideosV2(force = false) {
+    if (watchedInFlight) return watchedInFlight;
+    if (cfg.socialV2?.proactive?.enabled === false || !watchedKeepV2()) return null; // 没有自由时间就用不上
+    if (!force && Date.now() - watchedCache.at < 10 * 60000) return null;
+    watchedInFlight = (async () => {
+      try {
+        const data = await extrasGetV2(`/bili/watched?limit=${watchedKeepV2()}`);
+        watchedCache.list = (Array.isArray(data.videos) ? data.videos : []).filter((v) => /^BV[0-9A-Za-z]{10}$/.test(String(v?.bvid)))
+          .map((v) => ({ bvid: v.bvid, title: String(v.title || '').slice(0, 80), at: Number(v.at) * 1000 || 0 }));
+      } catch {
+        // extras 没起来：留着上次的
+      } finally {
+        watchedCache.at = Date.now();
+        watchedInFlight = null;
+      }
+    })();
+    return watchedInFlight;
+  }
   function noteWatchedVideoV2(resultText) {
     const text = String(resultText || '');
     const bvid = /"bvid"\s*:\s*"(BV[0-9A-Za-z]{10})"/.exec(text)?.[1];
@@ -312,15 +335,14 @@ export function createFreeTime(app) {
     let title = '';
     const m = /"title"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text);
     if (m) { try { title = String(JSON.parse(m[1])); } catch { title = ''; } }
-    const keep = Math.max(0, Math.floor(Number(cfg.socialV2?.proactive?.watchedVideos ?? 20)));
-    const list = (socialV2.watchedVideos || []).filter((v) => v.bvid !== bvid);
+    const keep = watchedKeepV2();
+    const list = watchedCache.list.filter((v) => v.bvid !== bvid);
     list.push({ bvid, title: title.slice(0, 80), at: Date.now() });
-    socialV2.watchedVideos = keep ? list.slice(-keep) : [];
-    saveSocialV2State();
+    watchedCache.list = keep ? list.slice(-keep) : [];
   }
 
   function watchedVideosLineV2() {
-    const list = (socialV2.watchedVideos || []).slice().reverse();
+    const list = watchedCache.list.slice(-watchedKeepV2()).reverse();
     if (!list.length) return '';
     return `最近看过的视频（推荐里再刷到就跳过，别重看）：${list.map((v) => `${v.title ? `《${v.title}》` : ''}${v.bvid}`).join('、')}\n`;
   }
@@ -381,7 +403,7 @@ export function createFreeTime(app) {
     if (curfew) ft.curfewSent = true;
     else ft.restOfferSent = true;
     saveSocialV2State();
-    const markRead = `mcp__snowluma__qq_mark_read(key="${PLAY_KEY}", token=${st.agentToken})`;
+    const markRead = 'qq_mark_read()';
     const text = night
       ? `【该睡觉了】已经到睡觉时间啦。手上这个看完就收尾：关掉多余的标签页，调用 ${markRead}，明天再玩。`
       : curfew
@@ -449,7 +471,8 @@ export function createFreeTime(app) {
       byKey: c.byKey && typeof c.byKey === 'object' && !Array.isArray(c.byKey) ? c.byKey : {},
     };
   }
-  // byKey 里给某一处单独写的 minIntervalMinutes / perConversationPerDay（比如不熟的群更少）
+  // byKey 里给某一处单独写的 minIntervalMinutes / perConversationPerDay（比如不熟的群更少）、
+  // beforeBedMinutes（>0：白天不往这里分享，离这晚睡觉不到这么多分钟才发；2026-11-02 主人嫌小群里她白天主动说得太多）
   function playShareCfgForV2(key) {
     const c = playShareCfgV2();
     const o = c.byKey[key];
@@ -459,9 +482,31 @@ export function createFreeTime(app) {
       ...c,
       ...(num(o.minIntervalMinutes) !== null ? { minIntervalMs: Math.max(0, num(o.minIntervalMinutes)) * 60000 } : {}),
       ...(num(o.perConversationPerDay) !== null ? { perConversationPerDay: Math.max(0, num(o.perConversationPerDay)) } : {}),
+      ...(num(o.beforeBedMinutes) !== null ? { beforeBedMinutes: Math.max(0, num(o.beforeBedMinutes)) } : {}),
     };
   }
-  function playShareGateV2(key, record = true) {
+  // 大事随时说，小事睡前说（2026-11-10 主人定的）：白天只在睡前分享的那几处（byKey 的 beforeBedMinutes > 0），
+  // 她忍不住马上想告诉家里人的大事（特别得意的画、卡了好久的游戏终于过了、心里难受、在别的群里受了委屈）
+  // 一天能专门来说 perDay 回；自由时间往这里发（工具填 big）和主动找人（念头是 big）合起来算。
+  // 普通的还是留到睡前；大事不占睡前那回的次数和间隔。socialV2.bigNews {enabled, perDay}，都有代码默认。
+  function bigNewsCfgV2() {
+    const c = cfg.socialV2?.bigNews ?? {};
+    const n = Number(c.perDay);
+    return { enabled: c.enabled !== false, perDay: Number.isFinite(n) && n >= 0 ? n : 1 };
+  }
+  function bigNewsUsedV2(key, now = Date.now()) {
+    const day = new Date(now); day.setHours(0, 0, 0, 0);
+    const since = day.getTime();
+    const shares = (Array.isArray(socialV2.playShares) ? socialV2.playShares : []).filter((s) => s?.big && s.key === key && Number(s.at) >= since);
+    const inits = (Array.isArray(socialV2.life?.initiates) ? socialV2.life.initiates : []).filter((x) => x?.big && x.sent && x.key === key && Number(x.at) >= since);
+    return shares.length + inits.length;
+  }
+  // 这里白天现在还能不能专门来说一件大事（只管 beforeBedMinutes > 0 的那几处，别处照常不用它）
+  function bigNewsLeftV2(key, now = Date.now()) {
+    const b = bigNewsCfgV2();
+    return b.enabled && b.perDay > 0 && bigNewsUsedV2(key, now) < b.perDay;
+  }
+  function playShareGateV2(key, record = true, { big = false } = {}) {
     const c = playShareCfgForV2(key);
     const now = Date.now();
     const play = socialV2.conversations.get(PLAY_KEY);
@@ -477,6 +522,11 @@ export function createFreeTime(app) {
       log(`[reserved2] 自由时间分享被拦 ${key}：只在有人找时说话`);
       return denied('这个群里你只在有人找你的时候说话', '');
     }
+    // socialV2.noReachOut：这里你不主动来找（有人托的照发）
+    if (!asked && noReachOut(cfg, key)) {
+      log(`[reserved2] 自由时间分享被拦 ${key}：不主动找`);
+      return denied('这里你不主动来找，等对方来找你再说', '想跟家里人说就留到家里的小群。');
+    }
     if (!c.enabled) return null;
     if (!Array.isArray(socialV2.playShares)) socialV2.playShares = [];
     const shares = socialV2.playShares.filter((s) => s && now - Number(s.at) < 48 * 3600 * 1000);
@@ -485,23 +535,36 @@ export function createFreeTime(app) {
     const last = mine.at(-1);
     // 同一回里接着发（比如说完一句再发截图）
     if (last && now - Number(last.lastAt || last.at) < c.burstMs) { if (record) last.lastAt = now; return null; }
+    let bigNow = false;
     if (!asked) {
       const today = new Date(now); today.setHours(0, 0, 0, 0);
-      const todayShares = shares.filter((s) => Number(s.at) >= today.getTime() && !s.asked);
+      const todayShares = shares.filter((s) => Number(s.at) >= today.getTime() && !s.asked && !s.big);
+      const lastPlain = mine.filter((s) => !s.big).at(-1); // 白天说的大事不挡睡前那回
       const sessionStart = Number(play?.freeTime?.startedAt) || 0;
       let why = '';
-      if (last && c.minIntervalMs > 0 && now - Number(last.at) < c.minIntervalMs) why = `你 ${Math.round((now - Number(last.at)) / 60000)} 分钟前刚给这里分享过`;
+      let tail;
+      const toBed = Number(sleepStateV2(now)?.toBedMin);
+      if (c.beforeBedMinutes > 0 && !(Number.isFinite(toBed) && toBed <= c.beforeBedMinutes)) {
+        if (big && bigNewsLeftV2(key, now)) bigNow = true;
+        else if (big && bigNewsCfgV2().enabled) {
+          why = '今天白天已经专门来这里说过一件大事了';
+          tail = '别的留到晚上快睡觉的时候再说。';
+        } else {
+          why = '这里白天不用专门来说';
+          tail = '留到晚上快睡觉的时候，再跟大家说说今天最想说的一两样。';
+        }
+      } else if (lastPlain && c.minIntervalMs > 0 && now - Number(lastPlain.at) < c.minIntervalMs) why = `你 ${Math.round((now - Number(lastPlain.at)) / 60000)} 分钟前刚给这里分享过`;
       else if (todayShares.filter((s) => s.key === key).length >= c.perConversationPerDay) why = '今天已经给这里分享过好几回了';
       else if (todayShares.length >= c.globalPerDay) why = '今天已经分享得够多了';
-      else if (sessionStart && shares.filter((s) => Number(s.at) >= sessionStart && !s.asked).length >= c.perSession) why = '这次玩的时候已经分享过了';
+      else if (sessionStart && shares.filter((s) => Number(s.at) >= sessionStart && !s.asked && !s.big).length >= c.perSession) why = '这次玩的时候已经分享过了';
       if (why) {
         log(`[reserved2] 自由时间分享被拦 ${key}：${why}`);
-        return denied(why);
+        return denied(why, tail);
       }
     }
     if (!record) return null;
-    shares.push({ key, at: now, lastAt: now, ...(asked ? { asked: true } : {}) });
-    log(`[reserved2] 自由时间分享 ${key}${asked ? '（有人托的）' : ''}`);
+    shares.push({ key, at: now, lastAt: now, ...(asked ? { asked: true } : {}), ...(bigNow ? { big: true } : {}) });
+    log(`[reserved2] 自由时间分享 ${key}${asked ? '（有人托的）' : ''}${bigNow ? '（白天的大事）' : ''}`);
     saveSocialV2State();
     return null;
   }
@@ -509,6 +572,10 @@ export function createFreeTime(app) {
   return {
     exports: {
       FREE_TIME_REASONS,
+      bigNewsCfgV2,
+      bigNewsLeftV2,
+      refreshWatchedVideosV2,
+      watchedVideosV2: () => watchedCache.list,
       PLAY_LAST_ITEM_MS,
       PLAY_LOG_MAX,
       READ_PAGES_MAX,
@@ -532,12 +599,14 @@ export function createFreeTime(app) {
     },
     link() {
       ({
-        PLAY_SESSIONS_KEEP_MS, PLAY_SESSIONS_MAX, convLabelV2, whenV2, isConversationBusyV2,
-        isNightSleepV2, lifeCfgV2, moodEngineCfgV2, playHoldV2, replyOnlyGroupV2, saveSocialV2State, socialV2
+        PLAY_SESSIONS_KEEP_MS, PLAY_SESSIONS_MAX, convLabelV2, extrasGetV2, whenV2, isConversationBusyV2,
+        isNightSleepV2, lifeCfgV2, moodEngineCfgV2, playHoldV2, replyOnlyGroupV2, saveSocialV2State, sleepStateV2, socialV2
       } = app);
     },
     start() {
     app.scheduler.every('free-time-curfew', 60 * 1000, freeTimeCurfewV2);
+    void refreshWatchedVideosV2(true);
+    app.scheduler.every('watched-videos', 60 * 1000, refreshWatchedVideosV2);
     },
   };
 }

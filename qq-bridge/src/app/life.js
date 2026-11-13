@@ -3,7 +3,23 @@
 import { activities as freeTimeActivities } from '../free-time.js';
 import { bestThought, clockMinutes, inClockWindow, initiateBlockReason, initiateCfg, initiateCfgFor, likedKinds, moodPhase, updateInterest } from '../inner-life.js';
 import { mdToPlain } from '../md-to-plain.js';
+import { noReachOut } from '../privacy-policy.js';
 import { SENSITIVE_RE } from '../sensitive.js';
+
+// 手上的事：best 是游戏玩得最好的一次（extras 记着，只往好里改）
+const threadV2 = (t) => ({ title: String(t.title || '').slice(0, 20), next: String(t.next || '').slice(0, 40), best: String(t.best || '').slice(0, 30) });
+const threadsOfV2 = (v) => (Array.isArray(v) ? v : []).filter((t) => t && t.title).slice(0, 5).map(threadV2).filter((t) => t.title);
+// extras 给的一天的计划 → 提示里用的样子（时间换成毫秒，做没做按编号）
+function planOfV2(date, p) {
+  const items = (Array.isArray(p?.items) ? p.items : []).map((x) => String(x ?? '').trim().slice(0, 30)).filter(Boolean).slice(0, 3);
+  if (!date || !items.length) return null;
+  const sec = (v) => (Number(v) > 0 ? Number(v) * 1000 : 0);
+  const progress = {};
+  for (const [i, x] of Object.entries(p.progress && typeof p.progress === 'object' ? p.progress : {})) {
+    if (items[i] && (x?.status === 'done' || x?.status === 'some')) progress[i] = { status: x.status, how: String(x.how || '').slice(0, 20), at: sec(x.at), key: String(x.key || '') };
+  }
+  return { date: String(date), items, at: sec(p.at), progress };
+}
 
 export function createLife(app) {
   const {
@@ -16,9 +32,18 @@ export function createLife(app) {
 
   // ── qqbot_agent：她自己的心情、生活和主动找人（纯函数在 src/inner-life.js，要想的交给 extras/life.py）─────────
   // 心情 socialV2.moodEngine：一轮结束后 extras 体会一下她现在什么心情，按半衰期淡回平常，接到门控 / 条数 / 想玩什么上。
-  // 生活 socialV2.life：自由时间里没弄完的事（threads）、按见闻 interest 学到的喜好、早上想今天干嘛、睡前日记。
+  // 生活：自由时间里没弄完的事（threads）、按见闻 interest 学到的喜好、早上想今天干嘛、睡前日记（喜好和问过没有记在 socialV2.life，别的见下面 lifeView）。
   // 主动找人 socialV2.initiate：闲着时 extras 想想有没有想跟谁说的事，打分过阈值才叫醒她去说，有次数、间隔、没人理就停。
   
+  // 计划（带做没做）、手上的事、最近的日记，原件都在 extras /data/life.json（2026-11-09 架构调整第 7 步）。
+  // 这里只是给同步拼的唤醒提示用的缓存，不存盘：refreshLifeViewV2 每 refreshMinutes 拉一次 GET /life?date=她的今天，
+  // 定计划、看做没做、整理手上的事、写日记拿回来的结果也直接换进来。重启后第一次拉到之前提示里没有这几行。
+  const lifeView = { plan: null, threads: [], diary: null, at: 0 };
+  function setDiaryV2(d) {
+    if (d?.gist && d.date && (!lifeView.diary || String(d.date) >= lifeView.diary.date)) {
+      lifeView.diary = { date: String(d.date), gist: String(d.gist).slice(0, 40), at: Number(d.at) > 0 ? Number(d.at) * 1000 : Date.now() };
+    }
+  }
   function loadLifeV2(raw) {
     const l = emptyLifeV2();
     if (!raw || typeof raw !== 'object') return l;
@@ -35,20 +60,11 @@ export function createLife(app) {
     l.initiateNextAt = next > 0 && next < now + 12 * 3600 * 1000 ? next : 0;
     l.planDate = String(raw.planDate || '');
     l.diaryDate = String(raw.diaryDate || '');
-    const items = (v, n) => (Array.isArray(v) ? v.map((x) => String(x ?? '').trim().slice(0, 30)).filter(Boolean).slice(0, n) : []);
-    if (raw.plan && typeof raw.plan === 'object' && items(raw.plan.items, 3).length) {
-      l.plan = { date: String(raw.plan.date || ''), items: items(raw.plan.items, 3), at: Number(raw.plan.at) || 0, progress: {} };
-      for (const [i, p] of Object.entries(raw.plan.progress && typeof raw.plan.progress === 'object' ? raw.plan.progress : {})) {
-        if (l.plan.items[i] && (p?.status === 'done' || p?.status === 'some')) l.plan.progress[i] = { status: p.status, how: String(p.how || '').slice(0, 20), at: Number(p.at) || 0, key: String(p.key || '') };
-      }
-    }
+    // 2026-11-09 以前这里还存着计划、日记一句话、手上的事的副本（plan / diary / threads），现在只在 lifeView 里（见下面），旧的读到就丢
     l.planCheckedAt = {};
     for (const [k, t] of Object.entries(raw.planCheckedAt && typeof raw.planCheckedAt === 'object' ? raw.planCheckedAt : {})) {
       if (Number(t) > 0 && Number(t) <= now) l.planCheckedAt[k] = Number(t);
     }
-    if (raw.diary && typeof raw.diary === 'object' && raw.diary.gist) l.diary = { date: String(raw.diary.date || ''), gist: String(raw.diary.gist).slice(0, 40), at: Number(raw.diary.at) || 0 };
-    l.threads = (Array.isArray(raw.threads) ? raw.threads : []).filter((t) => t && t.title).slice(0, 5).map((t) => ({ title: String(t.title).slice(0, 20), next: String(t.next || '').slice(0, 40) }));
-    l.threadsAt = Number(raw.threadsAt) || 0;
     l.dayPlay = (Array.isArray(raw.dayPlay) ? raw.dayPlay : []).filter((x) => x && x.what && now - Number(x.at) < 86400000).slice(-120);
     return l;
   }
@@ -118,6 +134,12 @@ export function createLife(app) {
       body: JSON.stringify(withSelfV2(pathname, body)),
       signal: AbortSignal.timeout(timeoutMs),
     });
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+    return data;
+  }
+  async function extrasGetV2(pathname, timeoutMs = 10000) {
+    const res = await fetch(extrasUrlV2(pathname), { signal: AbortSignal.timeout(timeoutMs) });
     const data = await res.json();
     if (!data?.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
     return data;
@@ -208,11 +230,9 @@ export function createLife(app) {
     if (!lc.enabled || !lc.threads) return null;
     try {
       const data = await extrasPostV2('/life/threads/update', { items, say, startedAt: socialV2.playStartedAt || 0 }, lc.timeoutMs);
-      socialV2.life.threads = (Array.isArray(data.threads) ? data.threads : []).slice(0, 5).map((t) => ({ title: String(t.title || '').slice(0, 20), next: String(t.next || '').slice(0, 40) })).filter((t) => t.title);
-      socialV2.life.threadsAt = Date.now();
-      saveSocialV2State();
-      log(`[生活] 手上的事：${socialV2.life.threads.map((t) => `${t.title}（${t.next}）`).join('；') || '没有'}`);
-      return socialV2.life.threads;
+      lifeView.threads = threadsOfV2(data.threads);
+      log(`[生活] 手上的事：${lifeView.threads.map((t) => `${t.title}（${t.next}）`).join('；') || '没有'}`);
+      return lifeView.threads;
     } catch (error) {
       log(`[生活] 整理手上的事失败：${error?.message ?? error}`);
       return null;
@@ -226,7 +246,7 @@ export function createLife(app) {
     const lc = lifeCfgV2();
     const L = socialV2.life;
     if (!lc.enabled || !lc.plan || !lc.planProgress || planProgressInFlight.has(key)) return null;
-    const plan = L.plan;
+    const plan = lifeView.plan;
     if (!plan || plan.date !== lifeDayV2(now)) return null;
     const open = plan.items.map((text, i) => ({ i, text })).filter((x) => plan.progress?.[x.i]?.status !== 'done');
     if (!open.length) return null;
@@ -238,20 +258,15 @@ export function createLife(app) {
     planProgressInFlight.add(key);
     L.planCheckedAt[key] = now;
     try {
-      const data = await extrasPostV2('/life/plan/progress', { items: open, place, lines, play: todayPlay }, lc.timeoutMs);
-      if (L.plan !== plan) return null; // 等的时候换了一天
-      const changed = [];
-      for (const p of Array.isArray(data.progress) ? data.progress : []) {
-        const i = Number(p?.i);
-        if (!open.some((x) => x.i === i) || (p.status !== 'done' && p.status !== 'some')) continue;
-        const prev = plan.progress[i];
-        if (prev?.status === p.status && p.status === 'some') continue; // 已经记过“弄了一点”，留着第一次的说法
-        plan.progress[i] = { status: p.status, how: String(p.how || '').slice(0, 20), at: Date.now(), key };
-        changed.push(`${plan.items[i]}→${p.status === 'done' ? '做了' : '弄了一点'}${p.how ? `（${p.how}）` : ''}`);
-      }
+      // 记在 extras（done 优先、第二次“弄了一点”留第一次的说法），回来的是整份计划
+      const data = await extrasPostV2('/life/plan/progress', { date: plan.date, key, items: open, place, lines, play: todayPlay }, lc.timeoutMs);
       saveSocialV2State();
+      if (lifeView.plan?.date !== plan.date) return null; // 等的时候换了一天
+      if (data.plan) lifeView.plan = planOfV2(plan.date, data.plan);
+      const changed = (Array.isArray(data.progress) ? data.progress : []).filter((p) => plan.items[Number(p?.i)])
+        .map((p) => `${plan.items[Number(p.i)]}→${p.status === 'done' ? '做了' : '弄了一点'}${p.how ? `（${p.how}）` : ''}`);
       if (changed.length) log(`[生活] ${key} 今天想的有进展：${changed.join('；')}`);
-      return plan.progress;
+      return lifeView.plan?.progress ?? null;
     } catch (error) {
       log(`[生活] ${key} 看今天想的做没做失败：${error?.message ?? error}`);
       return null;
@@ -277,26 +292,23 @@ export function createLife(app) {
       return `${t}（${p.status === 'done' ? '做了' : '弄了一点'}${p.how ? `：${p.how}` : ''}）`;
     });
   }
-  // 手上的事 extras 那边一周没碰会自己淡掉；隔一会儿同步一次（也让 extras 重启、手动改过的能看到）
+  // 隔一会儿从 extras 拉一次（手上的事一周没碰 extras 会自己淡掉，extras 重启、手动改过的也能看到）
   let lifeViewInFlight = null;
   function refreshLifeViewV2(force = false) {
     const lc = lifeCfgV2();
     if (!lc.enabled || lifeViewInFlight) return lifeViewInFlight;
-    if (!force && Date.now() - Number(socialV2.life.threadsAt || 0) < lc.refreshMinutes * 60000) return null;
+    if (!force && Date.now() - lifeView.at < lc.refreshMinutes * 60000) return null;
     lifeViewInFlight = (async () => {
+      const day = lifeDayV2();
       try {
-        const res = await fetch(extrasUrlV2('/life'), { signal: AbortSignal.timeout(10000) });
-        const data = await res.json();
-        if (!data?.ok) return;
-        socialV2.life.threads = (Array.isArray(data.threads) ? data.threads : []).slice(0, 5).map((t) => ({ title: String(t.title || '').slice(0, 20), next: String(t.next || '').slice(0, 40) })).filter((t) => t.title);
-        socialV2.life.threadsAt = Date.now();
-        const d = data.diary;
-        if (d?.gist && d.date && (!socialV2.life.diary || String(d.date) > socialV2.life.diary.date)) {
-          socialV2.life.diary = { date: String(d.date), gist: String(d.gist).slice(0, 40), at: Number(d.at) * 1000 || Date.now() };
-        }
+        const data = await extrasGetV2(`/life?date=${encodeURIComponent(day)}`);
+        lifeView.threads = threadsOfV2(data.threads);
+        lifeView.plan = planOfV2(day, data.plan);
+        setDiaryV2(data.diary);
       } catch {
-        socialV2.life.threadsAt = Date.now(); // extras 没起来：过一个周期再试
+        // extras 没起来：留着上次拉到的，过一个周期再试
       } finally {
+        lifeView.at = Date.now();
         lifeViewInFlight = null;
       }
     })();
@@ -364,8 +376,7 @@ export function createLife(app) {
     }
   }
   // 早上起床后想想今天想干嘛；睡觉时写日记。每分钟看一次，一天各一次，失败 30 分钟后再试
-  // 分工（2026-10-24 定）：计划和日记的原件在 extras /data/life.json（同一天再问拿回原来那份）；
-  // socialV2.life.plan 是 bridge 的副本，唤醒提示同步要用，做没做（progress）只记在这里。
+  // 计划、日记、做没做都在 extras /data/life.json（同一天再问拿回原来那份），这里只记今天问过没有（planDate / diaryDate）。
   let lifeTickBusy = false;
   async function lifeTickV2(now = Date.now()) {
     const lc = lifeCfgV2();
@@ -381,14 +392,15 @@ export function createLife(app) {
           const data = await extrasPostV2('/life/plan', { date: day, likes: likedKinds(list, L.interest).join('、'), mood: moodTextNowV2(now) }, lc.timeoutMs);
           const items = (Array.isArray(data.plan?.items) ? data.plan.items : []).map((x) => String(x).slice(0, 20)).filter(Boolean).slice(0, 3);
           L.planDate = day;
-          L.plan = items.length ? { date: day, items, at: Number(data.plan?.at) > 0 ? Math.min(now, Number(data.plan.at) * 1000) : now, progress: {} } : null;
+          lifeView.plan = planOfV2(day, data.plan);
           saveSocialV2State();
           log(`[生活] 今天想：${items.join('、') || '（没想出来）'}${data.existing ? '（之前想过的）' : ''}`);
         } catch (error) {
           log(`[生活] 想今天干嘛失败：${error?.message ?? error}`);
         }
       }
-      const asleep = isNightSleepV2() && !nightOwnerAwakeUntil.size;
+      // 只看还没过期的“主人叫醒了她”：过期的要等她自己去睡才清掉，以前看 .size，到点时陪着主人、后来没调去睡的那晚就不写日记（10-30、10-31）
+      const asleep = isNightSleepV2() && ![...nightOwnerAwakeUntil.values()].some((t) => t > now);
       if (lc.diary && asleep && L.diaryDate !== day && now - Number(L.diaryTriedAt || 0) >= 30 * 60000) {
         L.diaryTriedAt = now;
         const since = now - 18 * 3600000;
@@ -403,12 +415,12 @@ export function createLife(app) {
           moods: L.moodLog.filter((x) => Number(x.at) >= since).map((x) => `${whenV2(x.at)} ${x.text}`),
           play: L.dayPlay.filter((x) => Number(x.at) >= since).map((x) => `${whenV2(x.at)} ${x.what}`),
           chats: chats.slice(0, 8),
-          plan: L.plan?.date === day ? planTextV2(L.plan).join('、') : '',
+          plan: lifeView.plan?.date === day ? planTextV2(lifeView.plan).join('、') : '',
         };
         try {
           const data = await extrasPostV2('/life/diary', body, lc.timeoutMs);
           L.diaryDate = day;
-          if (data.diary?.gist) L.diary = { date: day, gist: String(data.diary.gist).slice(0, 40), at: Date.now() };
+          if (data.diary?.gist) setDiaryV2({ ...data.diary, date: day, at: Date.now() / 1000 });
           saveSocialV2State();
           log(`[生活] 日记（${day}）：${String(data.diary?.text || '').replace(/\s+/g, ' ').slice(0, 200)}${data.existing ? '（之前写过的）' : ''}`);
         } catch (error) {
@@ -423,19 +435,20 @@ export function createLife(app) {
   function lifeLinesV2(key, sleep, now) {
     const lc = lifeCfgV2();
     if (!lc.enabled || sleep.kind !== 'awake' || crossSessionSummaryOnlyV2(key)) return [];
-    const L = socialV2.life;
     const out = [];
     const day = lifeDayV2(now);
     // 聊天这边做不了电脑上的事：2026-10-24 早上“今天想：接着画会掉饼干的小家伙”，她在小群一小时里说了四回“我这就去画”，
     // 一回也没去（聊天这边说完还在聊，自由时间又没轮到）
-    if (lc.plan && L.plan?.date === day && L.plan.items.length) {
-      const pr = L.plan.progress || {};
-      const open = L.plan.items.map((t, i) => (pr[i]?.status === 'some' ? `${t}（弄了一点${pr[i].how ? `：${pr[i].how}` : ''}）` : pr[i]?.status === 'done' ? '' : t)).filter(Boolean);
-      const done = L.plan.items.map((t, i) => (pr[i]?.status === 'done' ? `${t}（${whenV2(pr[i].at)}${pr[i].how ? ` ${pr[i].how}` : ''}）` : '')).filter(Boolean);
+    const plan = lifeView.plan;
+    if (lc.plan && plan?.date === day && plan.items.length) {
+      const pr = plan.progress || {};
+      const open = plan.items.map((t, i) => (pr[i]?.status === 'some' ? `${t}（弄了一点${pr[i].how ? `：${pr[i].how}` : ''}）` : pr[i]?.status === 'done' ? '' : t)).filter(Boolean);
+      const done = plan.items.map((t, i) => (pr[i]?.status === 'done' ? `${t}（${whenV2(pr[i].at)}${pr[i].how ? ` ${pr[i].how}` : ''}）` : '')).filter(Boolean);
       if (open.length) out.push(`- 今天想：${open.join('、')}（随便想想的，不用非做完${key === PLAY_KEY ? '' : '；电脑上的事要等自由时间，现在就想去就用 qq_go_play 交给去玩的你，别光说“这就去”'}）`);
       if (done.length) out.push(`- 今天想的${open.length ? '已经做了' : '都做了'}：${done.join('、')}${open.length ? '' : '，接下来随便'}`);
     }
-    if (lc.diary && L.diary?.gist && L.diary.date < day && now - Number(L.diary.at) < 36 * 3600000) out.push(`- 昨天：${L.diary.gist}`);
+    const diary = lifeView.diary;
+    if (lc.diary && diary?.gist && diary.date < day && now - Number(diary.at) < 36 * 3600000) out.push(`- 昨天：${diary.gist}`);
     return out;
   }
 
@@ -450,27 +463,47 @@ export function createLife(app) {
     if (now < L.initiateNextAt) return null;
     L.initiateNextAt = nextAt();
     saveSocialV2State();
-    if (isNightSleepV2() || lazyInBedV2(now) || !inClockWindow(c.from, c.to, new Date(now))) return null;
+    if (isNightSleepV2() || lazyInBedV2(now)) return null;
+    // from / to 是平常能找人的钟点；只在睡前找的那几处不看它（这晚几点睡每天不一样，可能过了 to）
+    const inWindow = inClockWindow(c.from, c.to, new Date(now));
     const targets = [];
     const skipped = [];
     for (const k of c.targets) {
       if (!/^(private|group):\d+$/.test(k)) continue;
       // socialV2.replyOnlyGroups：这些群只在有人找她时说话，写在 targets 里也不找
       if (replyOnlyGroupV2(k)) { skipped.push(`${k} 只在有人找时说话`); continue; }
+      if (noReachOut(cfg, k)) { skipped.push(`${k} 不主动找`); continue; }
       // 家里以外的群：要在 byKey 里单独写了规矩（一般是更少）才找，不然不找（大群看不到私聊，也不该常去打扰）
       const outside = isOutsideGroupKeyV2(k);
       if (outside && !c.byKey[k]) { skipped.push(`${k} 不是家里的群`); continue; }
       const ck = initiateCfgFor(c, k);
+      const bedOnly = ck.beforeBedMinutes > 0;
+      if (!bedOnly && !inWindow) continue;
       const st = socialV2.conversations.get(k);
       if (!st || !isSessionAllowedInCurrentMode(k)) { skipped.push(`${k} 没聊过`); continue; }
       if (isConversationBusyV2(k, st)) { skipped.push(`${k} 正在聊`); continue; }
       const last = (Array.isArray(st.recentMessages) ? st.recentMessages : []).reduce((t, m) => Math.max(t, Number(m?.time) || 0), 0);
       const silence = last ? (now - last) / 60000 : 24 * 60;
       if (silence < ck.minSilenceMinutes) { skipped.push(`${k} ${Math.round(silence)} 分钟前刚聊过`); continue; }
-      const why = initiateBlockReason(L.initiates, k, now, ck);
+      // beforeBedMinutes：这里白天不主动找，只在快睡觉时来分享一下（2026-11-02 主人嫌小群里她白天主动说得太多）；
+      // 白天只说忍不住马上想说的大事（bigOnly，2026-11-10 主人定的“大事随时说，小事睡前说”，一天一回，见 free-time.js 的 bigNewsLeftV2）
+      let bedtime = false;
+      let bigOnly = false;
+      if (bedOnly) {
+        const toBed = Number(sleepStateV2(now)?.toBedMin);
+        if (Number.isFinite(toBed) && toBed <= ck.beforeBedMinutes) bedtime = true;
+        else if (inWindow && !outside && app.bigNewsLeftV2?.(k, now)) bigOnly = true;
+        else { skipped.push(`${k} 只在睡前找`); continue; }
+      }
+      // 白天的大事不占睡前那回的次数和间隔；大事自己只看一天一回，没人理、没开口的冷却照旧
+      const why = bigOnly
+        ? initiateBlockReason(L.initiates, k, now, { ...ck, perTargetPerDay: 0, minIntervalMinutes: 0 })
+        : initiateBlockReason(bedOnly ? L.initiates.filter((x) => !x.big) : L.initiates, k, now, ck);
       if (why) { skipped.push(`${k} ${why}`); continue; }
       targets.push({ key: k, label: convLabelV2(k, st), silenceMinutes: Math.round(silence), lastLines: chatLinesV2(st, 0, 10),
-        ...(outside ? { outside: true, note: '普通群，不是家里人：只想跟群里最近聊的、大家都能接的事，别带私聊和家里群的事' } : {}) });
+        ...(outside ? { outside: true, note: '普通群，不是家里人：只想跟群里最近聊的、大家都能接的事，别带私聊和家里群的事' }
+          : bedtime ? { bedtime: true, note: '快睡觉了：睡前跟家里人分享今天玩到、看到的最想说的一两件事；别再问之前问过、催过的事' }
+            : bigOnly ? { bigOnly: true, note: '白天：这里白天只说忍不住马上想告诉家里人的大事，普通的留到睡前' } : {}) });
     }
     if (!targets.length) {
       if (skipped.length) log(`[主动找人] 这次不找：${skipped.join('；')}`);
@@ -485,15 +518,16 @@ export function createLife(app) {
         const group = targets.filter((t) => !!t.outside === outside);
         if (!group.length) continue;
         const data = await extrasPostV2('/proactive/think', {
-          targets: group.map(({ outside: _o, ...t }) => t),
+          targets: group.map(({ outside: _o, bedtime: _b, ...t }) => t),
           mood: moodTextNowV2(now, !outside),
-          plan: !outside && L.plan?.date === day ? planTextV2(L.plan) : [],
+          plan: !outside && lifeView.plan?.date === day ? planTextV2(lifeView.plan) : [],
           now: whenV2(now),
         }, lifeCfgV2().timeoutMs);
-        thoughts.push(...(Array.isArray(data.thoughts) ? data.thoughts : []).filter((t) => group.some((g) => g.key === String(t?.key))));
+        // 白天只说大事的地方，只认 extras 说是大事的念头
+        thoughts.push(...(Array.isArray(data.thoughts) ? data.thoughts : []).filter((t) => group.some((g) => g.key === String(t?.key) && (!g.bigOnly || t?.big === true))));
       }
       const thresholdOf = (k) => initiateCfgFor(c, k).threshold;
-      log(`[主动找人] 想了想：${thoughts.map((t) => `${t.key} ${t.score}/${thresholdOf(String(t.key))} ${t.kind}「${t.thought}」`).join('；') || '没想到什么'}${skipped.length ? `（没考虑：${skipped.join('；')}）` : ''}`);
+      log(`[主动找人] 想了想：${thoughts.map((t) => `${t.key} ${t.score}/${thresholdOf(String(t.key))} ${t.kind}${t.big ? '（大事）' : ''}「${t.thought}」`).join('；') || '没想到什么'}${skipped.length ? `（没考虑：${skipped.join('；')}）` : ''}`);
       const best = bestThought(thoughts, thresholdOf, targets.map((t) => t.key));
       if (!best) return null;
       const st = socialV2.conversations.get(best.key);
@@ -502,10 +536,13 @@ export function createLife(app) {
         return null;
       }
       const at = Date.now();
-      L.initiates = [...L.initiates, { key: best.key, at, thought: String(best.thought).slice(0, 60), kind: best.kind, score: best.score, sent: false }].slice(-50);
-      st.initiateThought = { thought: String(best.thought).slice(0, 60), kind: best.kind, at };
+      const target = targets.find((t) => t.key === best.key);
+      const big = !!target?.bigOnly;
+      L.initiates = [...L.initiates, { key: best.key, at, thought: String(best.thought).slice(0, 60), kind: best.kind, score: best.score, sent: false, ...(big ? { big: true } : {}) }].slice(-50);
+      st.initiateThought = { thought: String(best.thought).slice(0, 60), kind: best.kind, at,
+        ...(target?.bedtime ? { bedtime: true } : {}), ...(big ? { big: true } : {}) };
       saveSocialV2State();
-      log(`[主动找人] 想去 ${best.key} 说：${best.thought}（${best.score}）`);
+      log(`[主动找人] 想去 ${best.key} 说${big ? '一件大事' : ''}：${best.thought}（${best.score}）`);
       await sendWakePromptV2(best.key, 'initiate');
       return best;
     } catch (error) {
@@ -521,6 +558,7 @@ export function createLife(app) {
       appraiseChatMoodV2,
       appraiseMoodV2,
       chatLinesV2,
+      extrasGetV2,
       extrasPostV2,
       personaBriefV2,
       withSelfV2,
@@ -531,6 +569,7 @@ export function createLife(app) {
       lifeDayV2,
       lifeLinesV2,
       lifeTickV2,
+      lifeViewV2: () => lifeView,
       loadLifeV2,
       moodEngineCfgV2,
       moodTextNowV2,
@@ -548,6 +587,7 @@ export function createLife(app) {
       } = app);
     },
     start() {
+    void refreshLifeViewV2(true);
     app.scheduler.every('life-view', 60 * 1000, refreshLifeViewV2);
     app.scheduler.every('life', 60 * 1000, lifeTickV2);
     app.scheduler.every('initiate', 60 * 1000, initiateTickV2);

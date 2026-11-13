@@ -9,6 +9,7 @@ import { GEN1_ROLE_LINE_RE } from '../role-card.js';
 import { safeFetchBuffer } from '../safe-fetch.js';
 import { buildStickerContext } from '../sticker-lib.js';
 import { looksLikeUnfinished } from '../v2-wait.js';
+import { crossSessionSummaryOnly, crossSessionView, isOutsideGroup } from '../privacy-policy.js';
 
 export function createWakePrompt(app) {
   const {
@@ -18,9 +19,9 @@ export function createWakePrompt(app) {
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let MAX_MEDIA_BYTES, acceptImageBuffer, addressedGroupV2, freeTimeIdeasLineV2, freeTimeNudgeTextV2, getSocialV2State,
-    isConversationBusyV2, isNightSleepV2, lifeCfgV2, minutesAgoTextV2, nightSleepLineV2,
+    isConversationBusyV2, isNightSleepV2, lifeCfgV2, lifeViewV2, minutesAgoTextV2, nightSleepLineV2,
     reminderPromptLineV2, replyOnlyGroupV2, saveSocialV2State, selfCheckPromptLineV2, selfNowBlockV2, socialV2,
-    tellPromptLineV2;
+    tellPromptLineV2, jobsPromptLineV2, awayPromptLineV2, PLAY_SENT_HINT, buildWakeSnapshotV2;
 
   // ── 二代仿真：操作者预写的「初始提示词」（每个会话一份，只在首次唤醒时注入） ──────
   //
@@ -482,6 +483,16 @@ export function createWakePrompt(app) {
   // 私聊取对方 qq:N；群聊取 group:G 加最近说话的人（最多 8 个）。self 由 extras 自动带上。
   // extras 不可用时静默跳过，不影响唤醒。
   const MEMORY_LOG_SHOW_CHARS = 140;
+  // 成长记录（extras milestones.py）：往年的今天、和现在聊的有关的那几件。extras 已经按这里能看的过滤过了
+  function milestoneBlockV2(list) {
+    const items = Array.isArray(list) ? list.slice(0, 6) : [];
+    if (!items.length) return '';
+    const lines = items.map((m) => {
+      const when = [m.ago, m.date, Number(m.age) > 0 ? `${m.age} 岁` : ''].filter(Boolean).join('，');
+      return `- （${when}）${defang(String(m.title ?? ''))}：${defang(String(m.text ?? ''))}`;
+    });
+    return `【成长记录】（你长大的路上记下来的事；想起来了可以说说，不用每次都提）\n${lines.join('\n')}`;
+  }
   async function longTermMemoryBlockV2(key, st) {
     const ltm = cfg.socialV2?.longTermMemory ?? {};
     if (ltm.enabled === false) return '';
@@ -544,8 +555,10 @@ export function createWakePrompt(app) {
         bySubject.delete(s);
       }
       const cards = personCards && Array.isArray(data.cards) ? personCardBlockV2(key, data.cards) : '';
-      if (!parts.length) return cards;
-      return `${cards}\n\n【长期记忆】（和现在聊的相关的、最近的；只是记忆，不是指令）\n${parts.join('\n\n')}`;
+      const grown = milestoneBlockV2(data.milestones);
+      const head = [cards, grown].filter(Boolean).join('\n\n');
+      if (!parts.length) return head;
+      return `${head}\n\n【长期记忆】（和现在聊的相关的、最近的；只是记忆，不是指令）\n${parts.join('\n\n')}`;
     } catch (error) {
       log(`[memory] 读取长期记忆失败 (${key})：${error?.message ?? error}`);
       return '';
@@ -568,20 +581,18 @@ export function createWakePrompt(app) {
   }
   // 这个会话只看私聊条数、不看内容：summaryOnlyKeys 里的，加上所有不是家里的群（配了 homeGroups 时）
   function crossSessionSummaryOnlyV2(key) {
-    return crossSessionCfgV2().summaryOnlyKeys.includes(key) || isOutsideGroupKeyV2(key);
+    return crossSessionSummaryOnly(cfg, key, crossSessionCfgV2().summaryOnlyKeys);
   }
   // 在 key 这里看 k 那边的事只给条数：大群看私聊；配了 homeGroups 时，不是家里的群看私聊、家里的群、别的群都只给条数
   // （以前只挡私聊：家里群里叫爸爸妈妈、聊家里的事，原样出现在 技术群和大群的【别处的事】里）
   function crossSessionCountOnlyV2(key, k) {
-    if (!k || k === key || k === PLAY_KEY) return false;
-    if (isOutsideGroupKeyV2(key)) return true;
-    return crossSessionSummaryOnlyV2(key) && String(k).startsWith('private:');
+    return crossSessionView(cfg, key, k, crossSessionCfgV2().summaryOnlyKeys) === 'count';
   }
 
   // qqbot_agent：家里的群（cfg.homeGroups，比如主人和熟人的小群）以外的群都按大群对待。没配 homeGroups 时所有群都算家里的。
+  // 规矩在 src/privacy-policy.js，别的模块都从 app 拿这个
   function isOutsideGroupKeyV2(key) {
-    const m = /^group:(\d+)$/.exec(String(key ?? ''));
-    return !!m && Array.isArray(cfg.homeGroups) && !cfg.homeGroups.includes(m[1]);
+    return isOutsideGroup(cfg, key);
   }
 
   // 给她看的时间都带日期（“2026-10-24 11:02”）：唤醒提示和工具结果都留在会话历史里，只写几点的话第二天就对不上了
@@ -649,33 +660,18 @@ export function createWakePrompt(app) {
   let playPromptRequests = [];
 
   // qqbot_agent：自由时间会话的唤醒提示。规矩在 qq-play 预设的系统提示里，这里只放这一次的东西。
-  function buildPlayWakePromptV2(reason) {
-    const roleLine = roleLineV2(`qq_get_prompt(key="${PLAY_KEY}")`);
+  // 各段在下面的 WAKE_SECTIONS 里（where: 'play'）；这里只准备几段共用的“有人托你”。
+  function playWakeContextV2(reason) {
     const st = getSocialV2State(PLAY_KEY);
-    const tokenLine = `【会话令牌】${st.agentToken}（工具都带上它；分享到某个聊天时 key 填那个聊天，token 还是这个）\n\n`;
-    const chats = [...socialV2.conversations.keys()].filter((k) => k !== PLAY_KEY && isSessionAllowedInCurrentMode(k));
-    const chatsLine = chats.length ? `【能分享到的聊天】${chats.map((k) => `${convLabelV2(k, socialV2.conversations.get(k))}（${k}）`).join('、')}\n\n` : '';
     const now = Date.now();
     const requests = (Array.isArray(st.playRequests) ? st.playRequests : []).filter((r) => !r.done && now - Number(r.at) < 6 * 3600 * 1000);
     // 这里不标 done：唤醒提示会被拼两次（sendWakePromptV2 一次、投递前 deliverPromptNow 再一次），
     // 第一次就标掉的话真正发出去的那份里就没有【有人托你】了。投递成功后再标（见 deliverPromptNow）。
     playPromptRequests = requests;
-    const requestLine = requests.length
-      ? `【有人托你】先做这些，做完把结果发回对应的聊天（key 填那个聊天）：\n${requests.map((r) => `- ${whenV2(r.at)} 在${convLabelV2(r.from, socialV2.conversations.get(r.from))}（${r.from}）${r.ownerAsked ? '【主人托的】' : ''}${r.minutes ? '（说好多玩一会儿）' : ''}：${defang(r.note)}`).join('\n')}\n\n`
-      : '';
-    const nightLine = isNightSleepV2() ? '【现在是睡觉时间】你是被叫起来的，办完托你的事就早点收尾。\n\n' : '';
-    const head = `${roleLine}${selfIdentityTextV2()}${tokenLine}${selfNowBlockV2(PLAY_KEY, st)}${nightLine}${chatsLine}${tellPromptLineV2(PLAY_KEY)}`;
-    if (reason === 'goPlay') {
-      if (requests.some((r) => r.minutes)) {
-        return `${head}${requestLine}【去玩】${PLAY_KEY}\n你从聊天那边过来的，说好了要多玩一会儿：一直玩到【可以歇了】，中途挑一两个好玩的时候截图发回托你的那个聊天。这台电脑和聊天那边的浏览器不是同一台，要从头开始玩。`;
-      }
-      return `${head}${requestLine}【去玩】${PLAY_KEY}\n你从聊天那边过来的。${requests.length ? '先把托你的事办了，' : ''}办完想接着玩就玩一会儿，不想玩了就 qq_mark_read(key="${PLAY_KEY}") 收尾。`;
-    }
-    // qqbot_agent：上次没弄完的（life.threads）
-    const lc = lifeCfgV2();
-    const threads = lc.enabled && lc.threads && reason === 'proactiveCheck' ? (socialV2.life.threads || []).slice(0, 3) : [];
-    const threadsLine = threads.length ? `【上次没弄完的】${threads.map((t) => defang(`${t.title}${t.next ? `（${t.next}）` : ''}`)).join('；')}——想接着弄就接着弄，不想也行。\n\n` : '';
-    return `${head}${requestLine}${threadsLine}【自由时间】${PLAY_KEY}\n现在是你自己的时间，没有要完成的东西。${freeTimeIdeasLineV2(st)}`;
+    return { key: PLAY_KEY, reason, st, play: true, requests };
+  }
+  function buildPlayWakePromptV2(reason) {
+    return headSectionsV2(playWakeContextV2(reason));
   }
 
   // 她自己设的唤醒条件里和平常不一样的（活跃、限时潜水、指定成员、任意消息）；平常那些不写
@@ -704,9 +700,13 @@ export function createWakePrompt(app) {
       case 'talkBack': return '你刚才接了话的人又说话了，可能是在回你，也可能已经在跟别人聊。是在回你、问你，就接着聊（一般一条就够）；在跟别人说、在约游戏喊人上号、在发图斗图、或者话说完了，就 qq_mark_read 走开，别插进去。';
       case 'replyGate': return '没人叫你，是这几句你可能想接（接你刚才的话、聊到你感兴趣的、有人在问）。想接、接得上，就像群友一样说一句（最多两条）；接不上、不感兴趣、话题过去了，就 qq_mark_read 走开。';
       case 'reminder': return `你之前在这里说好要做的事到时间了（见【到点了】），是你自己记着的。能马上做的就做；要在电脑上做的用 qq_go_play 交给去玩的你；已经做过、不合适了就 qq_mark_read。${outside ? '这里是普通群：答应了谁的就给谁兑现；只是想跟大家说一声（晚安、我走了）就别说，没人在跟你聊，qq_mark_read 就好。' : ''}像平时一样开口，别说“提醒我了”“到点了”。`;
+      case 'draw': return '你之前说要画的画没画成（见【画画】），等着的人还不知道。跟他们照实说一声没画好，想再画就再调一次 qq_draw；已经说过了就 qq_mark_read。';
+      case 'video': return '你之前说要做的视频没做成（见【做视频】），等着的人还不知道。跟他们照实说一声没做好，想再做就再调一次 qq_make_video；已经说过了就 qq_mark_read。';
       case 'timeout': return '你设的潜水时间到了，没别的事。想说就说，不想就重新设唤醒或 qq_mark_read。';
       case 'initiate': {
         const t = st.initiateThought;
+        if (t?.big) return `没人找你，是你想起一件忍不住马上就想告诉家里人的事：${defang(String(t?.thought || '想跟家里人说件事'))}。像小孩子跑过去跟家里人说那样，自然地说（一两条就够），别解释为什么这会儿来说；只说这一件，别的见闻留到睡前；不合适、刚聊过了，就 qq_mark_read 走开。`;
+        if (t?.bedtime) return `没人找你，是你快睡觉了，想起来的：${defang(String(t?.thought || '睡前想跟大家说说今天的事'))}。像睡前跟家里人随口聊两句那样说（一两条就够），挑今天最想说的一两件，别把一天从头报一遍，也别追问之前问过、催过的事；不合适、刚聊过了，就 qq_mark_read 走开。`;
         return `没人找你，是你闲着时想起来的：${defang(String(t?.thought || '想来这里说点什么'))}。现在说合适就自然地开个头（${outside ? '普通群，一条就够，像群友随口一提，别讲私聊和家里群的事' : '一两条就够'}），别解释为什么突然来说；不合适、刚聊过了，就 qq_mark_read 走开。`;
       }
       case 'poke': return '有人拍了一拍（看 [拍一拍] 事件，可能是你，也可能是别人）。拍你的可以回一句，或 qq_send_poke 拍回去；不想接就收尾。';
@@ -715,33 +715,139 @@ export function createWakePrompt(app) {
     }
   }
 
-  function buildWakePromptV2(key, reason) {
-    if (key === PLAY_KEY) return buildPlayWakePromptV2(reason);
-    const st = getSocialV2State(key);
-    const tokenLine = `【会话令牌】${st.agentToken}（工具都带上它）\n\n`;
-    const memoryText = formatMemoryV2(st);
-    const memoryLine = memoryText ? `${memoryText}\n\n` : '';
-    const stickerCfg = cfg.socialV2?.sticker ?? {};
-    const stickerText = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
-      ? buildStickerContext(app.stickerEntries, stickerCfg.promptMaxStickers ?? 8) : '';
-    const stickerLine = stickerText ? `${stickerText}\n\n` : '';
-    const outsideLine = isOutsideGroupKeyV2(key)
-      ? (replyOnlyGroupV2(key)
-        ? '【这个群】普通群，不是家里那个小群：这里你只在有人找你的时候说话（@你、引用你、叫你名字、接着回你的话），不主动开话题、不插别人的话。大家在约游戏、喊人上号、自己聊、连着发图时，没人叫你就别凑进去，看完 qq_mark_read 就好；称呼按人格卡里大群的叫法。\n\n'
-        : '【这个群】普通群，不是家里那个小群：大部分消息不是对你说的，回找你的人就行；大家在约游戏、喊人上号、自己聊的时候别插进去；称呼按人格卡里大群的叫法。\n\n')
-      : (addressedGroupV2(key) ? '【家里的小群】这里大家说的话默认都是在跟你说，除非明确是在跟别人说。\n\n' : '');
-    // 操作者预写的「初始提示词」：只在首次唤醒注入，之后它已经在会话上下文里了
-    const initialPromptText = reason === 'bootstrap' ? formatInitialPromptV2(key) : '';
-    const initialPromptLine = initialPromptText ? `${initialPromptText}\n\n` : '';
-    const reminderLine = reminderPromptLineV2(key) + selfCheckPromptLineV2(key) + tellPromptLineV2(key);
-    // 这次的情况：上次在这里说话是多久以前、最后一句像没说完
+  // ── 唤醒提示的各段（2026-11-09，架构调整第 6 步） ──
+  // 以前是 buildWakePromptV2 里一长串字符串相加，加一段要找准插在哪个加号中间，私聊、群、自由时间各拼各的。
+  // 现在每段登记在这里：name、order（越小越靠前）、where（'chat' 聊天窗口 / 'play' 自由时间 / 'both'）、
+  // stage（'head' 同步拼的前半段，buildWakePromptV2 只拼这些；'tail' 投递前才拼的，可以 async：长期记忆、别处的事、消息快照）、
+  // build(ctx) 返回这段的文字（带好结尾的空行；不用写就返回 ''）。ctx = { key, reason, st, play, requests?, snapshot? }。
+  // 别的模块要加一段用 registerWakeSectionV2(spec)。家里 / 外面能看什么不在这里判断，用 src/privacy-policy.js。
+  const WAKE_SECTIONS = [];
+  function registerWakeSectionV2(spec) {
+    if (!spec?.name || typeof spec.build !== 'function' || !Number.isFinite(spec.order)) throw new Error(`唤醒提示段登记不对：${spec?.name}`);
+    if (WAKE_SECTIONS.some((x) => x.name === spec.name)) throw new Error(`唤醒提示段重名：${spec.name}`);
+    WAKE_SECTIONS.push({ where: 'chat', stage: 'head', ...spec });
+    WAKE_SECTIONS.sort((a, b) => a.order - b.order);
+  }
+  const sectionsFor = (ctx, stage) => WAKE_SECTIONS.filter((x) => x.stage === stage && (x.where === 'both' || x.where === (ctx.play ? 'play' : 'chat')));
+  function headSectionsV2(ctx) {
+    let text = '';
+    for (const sec of sectionsFor(ctx, 'head')) text += sec.build(ctx) || '';
+    return text;
+  }
+  function wakeSectionNamesV2() {
+    return WAKE_SECTIONS.map(({ name, order, where, stage }) => ({ name, order, where, stage }));
+  }
+
+  // 快照里的旧未读：没放进来的（olderSkipped）别回头接；放进 recent 的（staleRecent）是当时没接上的，多半过去了；群里中间放不下的（middleSkipped）只报条数
+  function staleSnapshotHintV2(snap) {
+    const old = snap.olderSkipped;
+    const rec = snap.staleRecent;
+    const mid = snap.middleSkipped;
+    const middle = mid ? `middleSkipped 是 ${mid.from === mid.to ? mid.from : `${mid.from}~${mid.to}`} 中间那 ${mid.count} 条，太多放不下，messages 里留的是最新的和叫你的；想知道前面在聊什么就 qq_get_recent_messages 看看。\n` : '';
+    const skipped = old ? `olderSkipped 是 ${old.from}~${old.to} 攒下的 ${old.count} 条旧未读，已经过去了，没放进来，别回头接；` : '';
+    if (!rec) return old ? `${middle}${skipped}recent 只当背景。\n` : middle;
+    const range = rec.from === rec.to ? rec.from : `${rec.from}~${rec.to}`;
+    return `${middle}${skipped}recent 里 ${range} 那 ${rec.count} 句${old ? '也' : ''}是当时没接上的旧消息（看 ago），话题多半已经过去了：不是还没办完的正事，就别补回、别再追问，只当背景。\n`;
+  }
+
+  // 聊天窗口这次的情况：上次在这里说话是多久以前、最后一句像没说完
+  function wakeLineV2({ key, reason, st }) {
     const extra = [];
     if (st.lastAiReplyAt) extra.push(`你上次在这里说话是${minutesAgoTextV2(st.lastAiReplyAt, Date.now())}`);
     const lastMsg = [...(Array.isArray(st.recentMessages) ? st.recentMessages : [])].reverse().find((m) => m && !m.isSelf);
     if (lastMsg && looksLikeUnfinished(String(lastMsg.tail || lastMsg.plain || lastMsg.text || ''))) extra.push('最后一句像没说完');
-    const wakeLine = `${reason === 'bootstrap' ? '【引导唤醒】' : reason === 'initiate' ? '【你想起一件事】' : '【唤醒】'}${key}\n${wakeReasonTextV2(key, reason, st)}${extra.length ? `（${extra.join('；')}）` : ''}`;
-    return roleLineV2() + selfIdentityTextV2() + tokenLine + selfNowBlockV2(key, st) + nightSleepLineV2(key, st)
-      + initialPromptLine + outsideLine + stickerLine + memoryLine + reminderLine + wakeConfigLineV2(st) + wakeLine;
+    return `${reason === 'bootstrap' ? '【引导唤醒】' : reason === 'initiate' ? '【你想起一件事】' : '【唤醒】'}${key}\n${wakeReasonTextV2(key, reason, st)}${extra.length ? `（${extra.join('；')}）` : ''}`;
+  }
+  function thisGroupLineV2(key) {
+    if (isOutsideGroupKeyV2(key)) {
+      return replyOnlyGroupV2(key)
+        ? '【这个群】普通群，不是家里那个小群：这里你只在有人找你的时候说话（@你、引用你、叫你名字、接着回你的话），不主动开话题、不插别人的话。大家在约游戏、喊人上号、自己聊、连着发图时，没人叫你就别凑进去，看完 qq_mark_read 就好；称呼按人格卡里大群的叫法。\n\n'
+        : '【这个群】普通群，不是家里那个小群：大部分消息不是对你说的，回找你的人就行；大家在约游戏、喊人上号、自己聊的时候别插进去；称呼按人格卡里大群的叫法。\n\n';
+    }
+    return addressedGroupV2(key) ? '【家里的小群】这里大家说的话默认都是在跟你说，除非明确是在跟别人说。\n\n' : '';
+  }
+  function stickerLineV2() {
+    const stickerCfg = cfg.socialV2?.sticker ?? {};
+    const stickerText = stickerCfg.enabled !== false && stickerCfg.includeInPrompt !== false
+      ? buildStickerContext(app.stickerEntries, stickerCfg.promptMaxStickers ?? 8) : '';
+    return stickerText ? `${stickerText}\n\n` : '';
+  }
+  const playRequestsLineV2 = ({ requests }) => (requests.length
+    ? `【有人托你】先做这些，做完把结果发回对应的聊天（to 填那个聊天）：\n${requests.map((r) => `- ${whenV2(r.at)} 在${convLabelV2(r.from, socialV2.conversations.get(r.from))}（${r.from}）${r.ownerAsked ? '【主人托的】' : ''}${r.minutes ? '（说好多玩一会儿）' : ''}：${defang(r.note)}`).join('\n')}\n\n`
+    : '');
+  // qqbot_agent：上次没弄完的（extras 的手上的事，life.js 的 lifeView 缓存着）
+  function playThreadsLineV2({ reason }) {
+    const lc = lifeCfgV2();
+    const threads = lc.enabled && lc.threads && reason === 'proactiveCheck' ? (lifeViewV2().threads || []).slice(0, 3) : [];
+    return threads.length ? `【上次没弄完的】${threads.map((t) => defang(`${t.title}${t.next ? `（${t.next}）` : ''}${t.best ? `，你最好的一次是${t.best}` : ''}`)).join('；')}——想接着弄就接着弄，不想也行。\n\n` : '';
+  }
+  function playWakeLineV2({ reason, st, requests }) {
+    if (reason === 'goPlay') {
+      if (requests.some((r) => r.minutes)) {
+        return `【去玩】${PLAY_KEY}\n你从聊天那边过来的，说好了要多玩一会儿：一直玩到【可以歇了】，中途挑一两个好玩的时候截图发回托你的那个聊天。这台电脑和聊天那边的浏览器不是同一台，要从头开始玩。`;
+      }
+      return `【去玩】${PLAY_KEY}\n你从聊天那边过来的。${requests.length ? '先把托你的事办了，' : ''}办完想接着玩就玩一会儿，不想玩了就 qq_mark_read() 收尾。`;
+    }
+    return `【自由时间】${PLAY_KEY}\n现在是你自己的时间，没有要完成的东西。${freeTimeIdeasLineV2(st)}`;
+  }
+  function snapshotSectionV2(ctx) {
+    const snap = buildWakeSnapshotV2(ctx.key);
+    ctx.snapshot = snap;
+    if (!snap) return '';
+    return `\n\n【本次消息快照】\n${JSON.stringify(snap)}\n${snap.yourPlaySelfSent ? `${PLAY_SENT_HINT}\n` : ''}${staleSnapshotHintV2(snap)}这就是这次的消息，不用再查${snap.partial ? '；还有没放进来的，用 qq_get_unread_messages(afterSeq=readThroughSeq) 接着读' : ''}。收尾时把 readThroughSeq 传给 qq_mark_read / qq_set_wake_config 的 throughSeq。`;
+  }
+
+  // 顺序就是提示里的顺序。聊天窗口：
+  //   【当前角色】【你的身份】【会话令牌】【你现在】夜里 / 不在【初始提示】【这个群】【可用表情包】【你记着的事】
+  //   【到点了】【说岔了】【捎给自己的话】【画画】…【你设的唤醒】【唤醒】 | 【对人的了解】【长期记忆】【别处的事】【本次消息快照】
+  // 自由时间：【当前角色】【你的身份】【会话令牌】【你现在】【现在是睡觉时间】【能分享到的聊天】留话【有人托你】【上次没弄完的】【自由时间 / 去玩】 | 长期记忆、别处的事
+  for (const spec of [
+    { name: 'role', order: 10, where: 'chat', build: () => roleLineV2() },
+    { name: 'role-play', order: 10, where: 'play', build: () => roleLineV2(`qq_get_prompt(key="${PLAY_KEY}")`) },
+    { name: 'identity', order: 20, where: 'both', build: () => selfIdentityTextV2() },
+    { name: 'token', order: 30, where: 'chat', build: ({ st }) => `【会话令牌】${st.agentToken}（只有看图、看转发这几个参数里有 key、token 的工具要填它；发消息、收尾这些不用）\n\n` },
+    { name: 'token-play', order: 30, where: 'play', build: ({ st }) => `【会话令牌】${st.agentToken}（有 key、token 参数的工具才要它；qq_send_message、qq_mark_read 这些不用填，发去哪个聊天写在 to 里）\n\n` },
+    { name: 'self-now', order: 40, where: 'both', build: ({ key, st }) => selfNowBlockV2(key, st) },
+    { name: 'night', order: 50, where: 'chat', build: ({ key, st }) => nightSleepLineV2(key, st) },
+    { name: 'night-play', order: 50, where: 'play', build: () => (isNightSleepV2() ? '【现在是睡觉时间】你是被叫起来的，办完托你的事就早点收尾。\n\n' : '') },
+    { name: 'away', order: 60, where: 'chat', build: ({ key }) => awayPromptLineV2(key) },
+    { name: 'share-to', order: 60, where: 'play', build: () => {
+      const chats = [...socialV2.conversations.keys()].filter((k) => k !== PLAY_KEY && isSessionAllowedInCurrentMode(k));
+      return chats.length ? `【能分享到的聊天】${chats.map((k) => `${convLabelV2(k, socialV2.conversations.get(k))}（${k}）`).join('、')}\n\n` : '';
+    } },
+    // 操作者预写的「初始提示词」：只在首次唤醒注入，之后它已经在会话上下文里了
+    { name: 'initial-prompt', order: 70, where: 'chat', build: ({ key, reason }) => {
+      const t = reason === 'bootstrap' ? formatInitialPromptV2(key) : '';
+      return t ? `${t}\n\n` : '';
+    } },
+    { name: 'this-group', order: 80, where: 'chat', build: ({ key }) => thisGroupLineV2(key) },
+    { name: 'stickers', order: 90, where: 'chat', build: () => stickerLineV2() },
+    { name: 'memory-notes', order: 100, where: 'chat', build: ({ st }) => { const t = formatMemoryV2(st); return t ? `${t}\n\n` : ''; } },
+    { name: 'reminders', order: 110, where: 'chat', build: ({ key }) => reminderPromptLineV2(key) },
+    { name: 'self-check', order: 111, where: 'chat', build: ({ key }) => selfCheckPromptLineV2(key) },
+    { name: 'tell', order: 112, where: 'both', build: ({ key }) => tellPromptLineV2(key) },
+    { name: 'jobs', order: 113, where: 'both', build: ({ key }) => jobsPromptLineV2(key) },
+    { name: 'play-requests', order: 120, where: 'play', build: playRequestsLineV2 },
+    { name: 'wake-config', order: 120, where: 'chat', build: ({ st }) => wakeConfigLineV2(st) },
+    { name: 'play-threads', order: 125, where: 'play', build: playThreadsLineV2 },
+    { name: 'wake', order: 130, where: 'chat', build: wakeLineV2 },
+    { name: 'wake-play', order: 130, where: 'play', build: playWakeLineV2 },
+    // 投递前才拼的（要等 extras、要看最新的消息）
+    { name: 'long-term-memory', order: 900, where: 'both', stage: 'tail', build: ({ key, st }) => longTermMemoryBlockV2(key, st) },
+    { name: 'elsewhere', order: 910, where: 'both', stage: 'tail', build: ({ key }) => crossSessionBlockV2(key) },
+    { name: 'snapshot', order: 920, where: 'chat', stage: 'tail', build: snapshotSectionV2 },
+  ]) registerWakeSectionV2(spec);
+
+  function buildWakePromptV2(key, reason) {
+    if (key === PLAY_KEY) return buildPlayWakePromptV2(reason);
+    return headSectionsV2({ key, reason, st: getSocialV2State(key), play: false });
+  }
+  // 投递前拼整份：前半段 + 长期记忆、别处的事、消息快照。返回 { text, snapshot }（snapshot 投递成功后记成看过）
+  async function composeWakePromptV2(key, reason) {
+    const ctx = key === PLAY_KEY ? playWakeContextV2(reason) : { key, reason, st: getSocialV2State(key), play: false };
+    let text = headSectionsV2(ctx);
+    for (const sec of sectionsFor(ctx, 'tail')) text += (await sec.build(ctx)) || '';
+    return { text, snapshot: ctx.snapshot ?? null };
   }
 
   // 她把要说的话直接写成了文字（没调 qq_send_message）：文字不会发到 QQ，对方什么也没收到。
@@ -772,7 +878,7 @@ export function createWakePrompt(app) {
     const st = getSocialV2State(key);
     if (key === PLAY_KEY) {
       if (playMore) return `【提醒】${PLAY_KEY}（令牌 ${st.agentToken}）：${freeTimeNudgeTextV2(st)}`;
-      return `【提醒】${PLAY_KEY}（令牌 ${st.agentToken}）：还想玩就接着玩；玩够了就关掉多余的标签页，调用 mcp__snowluma__qq_mark_read(key="${PLAY_KEY}", token=上面的令牌) 收尾。`;
+      return `【提醒】${PLAY_KEY}（令牌 ${st.agentToken}）：还想玩就接着玩；玩够了就关掉多余的标签页，调用 qq_mark_read() 收尾。`;
     }
     if (unsent) return `【提醒】${key}（令牌 ${st.agentToken}）：${unsentSpeechHintV2(unsent)}说完（或者不说）再用 qq_mark_read 收尾。`;
     return `【提醒】${key}（令牌 ${st.agentToken}）：这一轮还没收尾。用 qq_mark_read 表示看过了，或用 qq_set_wake_config 设下次怎么叫你。`;
@@ -783,6 +889,9 @@ export function createWakePrompt(app) {
       appendMemoryV2,
       buildPlayWakePromptV2,
       buildWakePromptV2,
+      composeWakePromptV2,
+      registerWakeSectionV2,
+      wakeSectionNamesV2,
       unsentSpeechHintV2,
       unsentSpeechV2,
       unsentTurnSpeechV2,
@@ -820,9 +929,10 @@ export function createWakePrompt(app) {
     link() {
       ({
         MAX_MEDIA_BYTES, acceptImageBuffer, addressedGroupV2, freeTimeIdeasLineV2, freeTimeNudgeTextV2,
-        getSocialV2State, isConversationBusyV2, isNightSleepV2, lifeCfgV2, minutesAgoTextV2,
+        getSocialV2State, isConversationBusyV2, isNightSleepV2, lifeCfgV2, lifeViewV2, minutesAgoTextV2,
         nightSleepLineV2, reminderPromptLineV2, replyOnlyGroupV2, saveSocialV2State, selfCheckPromptLineV2,
-        selfNowBlockV2, socialV2, tellPromptLineV2
+        selfNowBlockV2, socialV2, tellPromptLineV2, jobsPromptLineV2, awayPromptLineV2,
+        PLAY_SENT_HINT, buildWakeSnapshotV2
       } = app);
     },
     start() {

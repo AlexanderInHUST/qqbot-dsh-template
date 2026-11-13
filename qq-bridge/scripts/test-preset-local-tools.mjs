@@ -25,6 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import { collectDshToolNames as collectDshToolNamesShared } from './dsh-tool-names.mjs';
+import yaml from 'js-yaml';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PRESETS_DIR = path.join(ROOT, 'dsh', 'agent-presets');
@@ -74,10 +75,15 @@ const LOCAL_EXECUTION_TOOLS = [
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
   // 0.2.0 新增对账
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
-  'subagent_codex', 'subagent_claude_code',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  'schedule_create', 'schedule_list',
+  // 0.2.2-rc.1 对账（subagent_codex / subagent_claude_code 没了，schedule_update / _delete 换成 schedule_edit / _view）
+  'apply_patch', 'plugin_market', 'schedule_edit', 'schedule_view',
+  'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_list', 'terminal_close',
+  // 0.2.2 的 working_directory（读、改当前目录；dsh-tool-working-directory 在全局层，QQ 会话都继承，2026-11-08 看会话记录才发现）
+  'working_directory',
 ];
 
 /**
@@ -285,15 +291,16 @@ test('hideTools 里的工具 MCP 连上后从清单里藏起来，执行时也�
   for (const n of listed.filter((x) => x.startsWith('mcp__snowluma__'))) {
     assert.ok(src.includes(`'${n.slice('mcp__snowluma__'.length)}'`), `${n} 是 mcp-snowluma-safe.js 注册的工具`);
   }
-  const play = fs.readFileSync(path.join(PRESETS_DIR, 'qq-play', 'agent.cordis.yml'), 'utf8');
-  const playListed = [...play.matchAll(/^\s+-\s+(mcp__[\w-]+__\w+)\s*$/gm)].map((m) => m[1]);
-  // 只有 qq_tell_myself 是 qq-play 多藏的（捎话只能从私聊和家里的小群发）
-  const PLAY_ONLY = ['mcp__snowluma__qq_tell_myself'];
-  assert.deepEqual(playListed.filter((n) => !PLAY_ONLY.includes(n)).sort(), [...listed].sort(), 'qq-play 和 qq-chat-v2 藏的一样');
-  for (const n of PLAY_ONLY) {
-    assert.ok(playListed.includes(n), `qq-play 藏起 ${n}`);
-    assert.ok(!listed.includes(n), `qq-chat-v2 不藏 ${n}`);
+  // 聊天那边藏换成原生工具的那几个的 MCP 版（2026-11-08 起 qq-native-tools.mjs，src/qq-capabilities.js）；返回图片的留在 MCP
+  const { nativeToolNamesFor } = await import(pathToFileURL(path.join(ROOT, 'src', 'qq-capabilities.js')).href);
+  for (const n of nativeToolNamesFor('chat').map((x) => `mcp__snowluma__${x}`)) assert.ok(listed.includes(n), `qq-chat-v2 藏起 ${n}`);
+  for (const n of ['mcp__snowluma__qq_get_message_images', 'mcp__snowluma__qq_get_forward_msg', 'mcp__snowluma__qq_get_sticker_image', 'mcp__snowluma__qq_get_self_image']) {
+    assert.ok(!listed.includes(n), `返回图片的 ${n} 聊天那边留在 MCP`);
   }
+  // qq-play 整个 snowluma MCP 都不给，QQ 的事只用原生工具
+  const playRows = yaml.load(fs.readFileSync(path.join(PRESETS_DIR, 'qq-play', 'agent.cordis.yml'), 'utf8'));
+  const playGuard = playRows.find((r) => r.id === 'qq-tool-restrict').config;
+  assert.deepEqual(playGuard.hidePrefixes, ['mcp__snowluma__', 'mcp__snowluma-host__'], 'qq-play 藏起 snowluma 的全部 MCP 工具');
 
   const mod = await import(pathToFileURL(path.join(dir, 'qq-tool-restrict.mjs')).href);
   const known = new Set(['mcp__snowluma__qq_send_message']);
@@ -323,6 +330,38 @@ test('hideTools 里的工具 MCP 连上后从清单里藏起来，执行时也�
   assert.ok(!restricted.has('mcp__snowluma__qq_send_message'), '别的照常');
   assert.equal(typeof tools._guard({ name: 'mcp__snowluma__qq_send_group_message' }), 'string', '执行时拒绝');
   assert.equal(tools._guard({ name: 'mcp__snowluma__qq_send_message' }), undefined);
+
+  // 换成原生工具的 MCP 版：调老名字时告诉她新名字（这个 preset 有那个原生工具才说）
+  const native = { ...tools, schemas: () => [{ name: 'qq_mark_read' }] };
+  mod.apply({ tools: native, on: ctx.on }, { hideTools: ['mcp__snowluma__qq_mark_read', 'mcp__snowluma__qq_tell_myself'] });
+  assert.match(native._guard({ name: 'mcp__snowluma__qq_mark_read' }), /改名了，现在叫 qq_mark_read.*不用填 key 和 token/);
+  assert.match(native._guard({ name: 'mcp__snowluma__qq_tell_myself' }), /在这里用不着/, '没有这个原生工具的照旧');
+
+  // hidePrefixes：MCP 连上以后整个前缀都藏，执行时拒；有同名原生工具的告诉她新名字
+  const k2 = new Set(['qq_mark_read']);
+  const r2 = new Set();
+  const l2 = [];
+  const t2 = {
+    restrict({ deny }) {
+      for (const n of deny) if (!k2.has(n)) throw new Error(`unknown global tool "${n}"`);
+      for (const n of deny) r2.add(n);
+      for (const fn of [...l2]) fn();
+    },
+    schemas: () => [...k2].filter((n) => !r2.has(n)).map((name) => ({ name })),
+    guard(fn) { this._guard = fn; },
+  };
+  console.error = () => {};
+  try {
+    mod.apply({ tools: t2, on: (_n, fn) => { l2.push(fn); return () => l2.splice(l2.indexOf(fn), 1); } }, { browser: 'play', hidePrefixes: ['mcp__snowluma__'] });
+    for (const n of ['mcp__snowluma__qq_get_recent_messages', 'mcp__snowluma__qq_mark_read', 'mcp__sandbox-browser__browser_navigate']) k2.add(n);
+    for (const fn of [...l2]) fn();
+  } finally {
+    console.error = errors;
+  }
+  assert.ok(r2.has('mcp__snowluma__qq_get_recent_messages') && r2.has('mcp__snowluma__qq_mark_read'), '前缀下的都藏');
+  assert.ok(!r2.has('mcp__sandbox-browser__browser_navigate') && !r2.has('qq_mark_read'), '别的不动');
+  assert.match(t2._guard({ name: 'mcp__snowluma__qq_get_recent_messages' }), /在这里用不着/);
+  assert.match(t2._guard({ name: 'mcp__snowluma__qq_mark_read' }), /改名了，现在叫 qq_mark_read/);
 });
 
 test('守卫导出的名单与本测试的清单一致（防两份名单各自漂移）', async () => {

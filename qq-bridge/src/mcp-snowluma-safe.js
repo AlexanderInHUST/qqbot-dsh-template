@@ -359,6 +359,9 @@ const TOOL_CONFIG_FLAGS = {
   qq_go_to_sleep: 'goToSleep',
   qq_remind_me: 'remindMe',
   qq_tell_myself: 'tellMyself',
+  qq_send_elsewhere: 'sendElsewhere',
+  qq_draw: 'draw',
+  qq_make_video: 'video',
 };
 const disabledTools = [];
 {
@@ -1025,7 +1028,7 @@ server.tool(
 if (cfg.socialV2?.tools?.getImages !== false) {
   server.tool(
     'qq_get_message_images',
-    '获取指定 QQ 消息中的图片/表情，并直接以图像内容返回给模型（视觉模型可“看懂”）。当消息文本里出现 [图片]、[表情包]、[表情] 或 hasMedia=true 时调用。表情包是对方在用图说话，看它是为了明白对方想表达什么，不是为了评价画面。支持一条消息里的多张图片/表情；要带会话令牌。',
+    '获取指定 QQ 消息中的图片/表情，并直接以图像内容返回给模型（视觉模型可“看懂”）。当消息文本里出现 [图片]、[表情包]、[表情] 或 hasMedia=true 时调用；你自己发过的画（[画:…]）和截图（[截图:…]）也能用它再看一眼。表情包是对方在用图说话，看它是为了明白对方想表达什么，不是为了评价画面。支持一条消息里的多张图片/表情；要带会话令牌。',
     {
       key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
       messageId: z.union([z.number(), z.string()]).describe('要查看的消息 id（QQ 消息 id 可为负数；也可用本地 seq）'),
@@ -1177,6 +1180,57 @@ server.tool(
 );
 
 server.tool(
+  'qq_draw',
+  '画一张画发到聊天里（有人让你画、或者你自己想画给大家看时用）。画出来是你自己用蜡笔、彩铅画的小孩画，风格不用写，只写画什么：画面里有谁、在干嘛、什么颜色、背景是什么，写具体一点。想要画上写字就写明要写哪几个字。画群里的人（“画画我们”“把大家画进去”“画某某”）就真把他们画进去，别换成小动物：prompt 里用群名片叫他们，写上你知道的他们的事、群里正聊的梗，people 填他们的 QQ 号，bridge 会照着头像和你对他们的了解补上样子；说了不要谁就别画谁。友好地画，不丑化、不画成坏人、不画黄的。一张要一两分钟到好几分钟，工具马上返回，画好了会自己发出去，到时候会告诉你；所以先跟人说一声你去画了（“等我画一下”），别说已经画好了，也别为同一张再调一次。caption 是跟在图后面的一句话（可选）。要看画成什么样，画好以后用 qq_get_message_images 看你发的那条。一天最多画 100 张。在自由时间里画给聊天看时，key 填要发去的聊天，token 用自由时间的令牌。结果不是 ok 就是没开始画，照实说。',
+  {
+    key: z.string().describe('画好以后发到哪个会话：group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（当前会话的，或自由时间的）'),
+    prompt: z.string().describe('要画什么（中文描述画面，300 字以内）'),
+    caption: z.string().optional().describe('跟在图后面的一句话（可选）'),
+    people: z.array(z.string()).max(4).optional().describe('画进去的群友（或你自己）的 QQ 号（消息里的 userId），最多 4 个。填了会照着他们的头像和你对他们的了解画成卡通人物')
+  },
+  async ({ key, token, prompt, caption, people }) => {
+    try {
+      const data = await agentApi('/api/socialV2/draw', {
+        method: 'POST',
+        body: JSON.stringify({ key, prompt, caption, people }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 30000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `没开始画：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_make_video',
+  '做一段短视频发到聊天里（有人让你做个视频、或者你自己想做一段给大家看时用），和画画是两回事。做出来是一段几秒的视频，带声音，可以是真人实拍感、动画、手绘等任何风格，prompt 里写清楚：画面里有谁、在干嘛、怎么动、镜头怎么走、什么风格、要什么声音。视频里要有群里的人（“拍拍我们”“把大家画进去”“画某某”）就真让他们出演，别换成小动物：prompt 里用群名片叫他们，写上你知道的他们的事、群里正聊的梗，people 填他们的 QQ 号，bridge 会照着头像和你对他们的了解补上样子；说了不要谁就别画谁。友好地画，不丑化、不画成坏人、不画黄的。一段要一两分钟，工具马上返回，做好了会自己发出去，到时候会告诉你；所以先跟人说一声你去做了（“等我做一下”），别说已经做好了，也别为同一段再调一次。caption 是视频发出去后跟着的一句话（可选）；seconds 是时长，1~15 秒，不填就是 8 秒。要看做成什么样，做好以后用 qq_get_message_images 看你发的那条（是抽了几帧拼的图）。在自由时间里做给聊天看时，key 填要发去的聊天，token 用自由时间的令牌。结果不是 ok 就是没开始做，照实说。',
+  {
+    key: z.string().describe('做好以后发到哪个会话：group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（当前会话的，或自由时间的）'),
+    prompt: z.string().describe('视频内容（中文描述画面、动作、镜头、风格、声音，500 字以内）'),
+    caption: z.string().optional().describe('跟在视频后面的一句话（可选）'),
+    seconds: z.number().int().min(1).max(15).optional().describe('时长，1~15 秒，不填是 8 秒'),
+    people: z.array(z.string()).max(4).optional().describe('画进去的群友（或你自己）的 QQ 号（消息里的 userId），最多 4 个。填了会照着他们的头像和你对他们的了解画成卡通人物')
+  },
+  async ({ key, token, prompt, caption, seconds, people }) => {
+    try {
+      const data = await agentApi('/api/socialV2/video', {
+        method: 'POST',
+        body: JSON.stringify({ key, prompt, caption, seconds, people }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 30000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `没开始做：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
   'qq_send_meme',
   '把 Telegram 沙雕图频道的一条帖子（先用 mcp__qqbot-extras__tg_browse / tg_look 找到、看过）的图发到聊天里，caption 是可选的一句短吐槽，会跟在图后面。一条一次调用。频率、白名单、红线关键词由工具检查，被拒绝就算了，像人一样随口带过，别把拒绝理由原样转述给别人。发出去的不要再用 qq_send_message 重复发。在自由时间里分享时，key 填要发去的聊天，token 用自由时间的令牌。',
   {
@@ -1322,6 +1376,38 @@ server.tool(
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `没捎过去：${error?.message ?? error}` }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  'qq_send_elsewhere',
+  '替这里去别的聊天窗口说句话：主人在这里（私聊或家里的小群）让你现在就去别处说一声时用（“跟妈妈说晚安”“去小群里告诉大家我到家了”）。qq_send_message 只能在这个窗口里说，拿这里的令牌往别处发会被拒。key 和 token 填这个窗口自己的，to 填要去说话的那个聊天；只能发到私聊和家里的小群，别的群用 qq_tell_myself 让那边的你去说。发的就是那边的人会看到的话，写成在那边说的样子（别把这里聊的内容搬过去）；那边的你下次看消息时会知道这是你从这里发的，那边有人回话是那边的你去接。得是主人刚在这里说的。结果不是 ok 就是没发出去，照实跟这边说，别说已经发了。',
+  {
+    key: z.string().describe('当前聊天（主人说话的这个窗口）的会话 key'),
+    token: z.string().describe('当前聊天的会话令牌'),
+    to: z.string().describe('要去说话的聊天的 key，比如 "group:123" 或 "private:456"'),
+    messages: z.union([z.string(), z.array(z.string()).min(1)]).describe('在那边要说的话：字符串=一条；数组=分多条'),
+    atUserId: z.union([z.number(), z.string()]).optional().describe('群里要 @ 的人的 QQ 号（可选，私聊不用）')
+  },
+  async ({ key, token, to, messages, atUserId }) => {
+    try {
+      let finalMessages = messages;
+      if (typeof finalMessages === 'string' && finalMessages.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(finalMessages.trim());
+          if (Array.isArray(parsed)) finalMessages = parsed.map(String);
+        } catch {}
+      }
+      const data = await agentApi('/api/socialV2/send-elsewhere', {
+        method: 'POST',
+        body: JSON.stringify({ key, to, messages: finalMessages, atUserId: atUserId ?? null }),
+        headers: { 'x-agent-token': token },
+        timeoutMs: 300000
+      });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: `没发出去：${error?.message ?? error}` }], isError: true };
     }
   }
 );

@@ -233,6 +233,15 @@ def record_watched(bvid: str, title: str | None, now: float | None = None) -> No
         store.save_json(path, db)
 
 
+def recent_watched(limit: int = 20) -> list[dict]:
+    """The last `limit` watched videos, oldest first: [{bvid, title, at}] (the bridge lists them in free time)."""
+    limit = max(0, min(100, int(limit)))
+    with store.LOCK:
+        db = store.load_json(store.state_path(WATCHED_FILE), {})
+    items = sorted(db.items(), key=lambda kv: float(kv[1].get("at") or 0))[-limit:] if limit else []
+    return [{"bvid": k, "title": str(v.get("title") or ""), "at": float(v.get("at") or 0)} for k, v in items]
+
+
 def rewatch_refusal(bvid: str, seen: dict) -> str:
     when = time.strftime("%m-%d %H:%M", time.localtime(float(seen.get("at") or 0)))
     title = f"《{seen['title']}》" if seen.get("title") else ""

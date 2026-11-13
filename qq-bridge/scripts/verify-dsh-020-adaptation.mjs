@@ -36,7 +36,7 @@ import { readBridgeSource } from './lib/bridge-source.mjs';
 
 const ROOT = process.cwd();
 const DSH_MODULES = dshModulesDir();
-const DSH_HOME = path.join(os.homedir(), '.dsh');
+const DSH_HOME = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
 const BASE = process.env.DSH_BASE_URL || 'http://127.0.0.1:3080';
 
 let pass = 0, fail = 0;
@@ -67,7 +67,8 @@ for (const p of ['qq-chat', 'qq-chat-v2']) {
   let schemaOk = false;
   try { persona.Config(row.config); schemaOk = true; } catch {}
   check(`preset ${p}: persona.config 通过 DSH schema`, schemaOk);
-  check(`preset ${p}: 保留 {{model}} / {{cwd}} 变量`, /\{\{model\}\}/.test(row.config.prefix) && /\{\{cwd\}\}/.test(row.config.suffix ?? ''));
+  // 二代提示词里不出现模型名和容器路径（CLAUDE.md 的“坑”：persona 不带 suffix）；一代 qq-chat 是上游原样，不管
+  if (p !== 'qq-chat') check(`preset ${p}: 不带 {{model}} / {{cwd}}`, !/\{\{(?:model|cwd)\}\}/.test(`${row.config.prefix ?? ''}${row.config.suffix ?? ''}`));
 }
 
 // ── 2. 部署侧：DSH 0.1.7 的 preset 机制 ──────────────────────────────────────
@@ -118,10 +119,15 @@ check('守卫：拒绝 0.1.7 已删除的 cordis 旧工具名（避免静默失�
 //   ③ 插件装载权（= 任意代码执行）与无人值守的自我调度
 const GUARD_020_NAMES = [
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
-  'subagent_codex', 'subagent_claude_code',
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   'plugin_manager',
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  'schedule_create', 'schedule_list',
+  // 0.2.2-rc.1 对账（subagent_codex / subagent_claude_code 没了，schedule_update / _delete 换成 schedule_edit / _view）
+  'apply_patch', 'plugin_market', 'schedule_edit', 'schedule_view',
+  'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_list', 'terminal_close',
+  // 0.2.2 的 working_directory（读、改当前目录；dsh-tool-working-directory 在全局层，QQ 会话都继承，2026-11-08 看会话记录才发现）
+  'working_directory',
 ];
 const guardMod = await import(pathToFileURL(canonicalGuardPath).href);
 const guardNames = new Set(guardMod.RESTRICTED_TOOL_NAMES ?? []);
@@ -137,7 +143,9 @@ const scanned = collectDshToolNames();
 if (scanned.names.size === 0) {
   skip('守卫名单与 DSH 真实工具名对账', '未扫到任何 DSH 包（DSH 未安装？）');
 } else {
-  const fabricated = [...guardNames].filter((n) => !n.startsWith('dev_') && !scanned.names.has(n));
+  // dsh-plugin-guard 是 web profile 才装的包，npm 安装里没有；名字是对的，留着防它哪天被装上（同 test-preset-local-tools）
+  const OPTIONAL_PLUGIN_TOOLS = new Set(['dsh_snapshot', 'dsh_rollback', 'incident_resolved']);
+  const fabricated = [...guardNames].filter((n) => !n.startsWith('dev_') && !scanned.names.has(n) && !OPTIONAL_PLUGIN_TOOLS.has(n));
   check('守卫名单无拼错的假名（restrict 不会静默失效）', fabricated.length === 0, fabricated.join(', ') || `扫过 ${scanned.packages.length} 个包`);
 }
 

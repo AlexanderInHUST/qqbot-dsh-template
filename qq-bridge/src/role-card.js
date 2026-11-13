@@ -45,6 +45,18 @@ export function stripRoleComments(text) {
 }
 
 /**
+ * qqbot_agent（2026-11-04）：人格卡里 <!-- grow:名字 --> … <!-- /grow:名字 --> 包着的部分跟着她长大，
+ * 内容来自 extras 的成长档案（regions[名字]）；没有档案、没有这一处时照原文。标记本身总是去掉：
+ * 注释后面紧跟的换行会被 stripRoleComments 一起吃掉，行内的标记留到那时会把两行粘成一行。
+ */
+export function applyGrowRegions(text, regions) {
+  return String(text ?? '').replace(/<!--\s*grow:(\w+)\s*-->([\s\S]*?)<!--\s*\/grow:\1\s*-->/g, (all, name, inner) => {
+    const own = regions && typeof regions[name] === 'string' ? regions[name] : null;
+    return own !== null ? own : inner.replace(/^\n+|\n+$/g, '');
+  });
+}
+
+/**
  * 按标题把人格卡拆成小节。
  * @returns {{mode: 'all'|'v1'|'v2', heading: string|null, lines: string[]}[]}
  */

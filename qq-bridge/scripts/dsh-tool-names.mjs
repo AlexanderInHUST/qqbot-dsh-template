@@ -124,7 +124,7 @@ export function dshToolNameSet(options) {
  * 这是**发现用**的启发式（宁可多报，人工再判），不是安全边界本身；
  * 边界是守卫的 restrict 名单 + 执行期白名单。
  */
-export const DANGER_TOOL_RE = /(pwsh|bash|shell|exec|spawn|process|terminal|pty|read|write|edit|file|fs_|glob|grep|patch|str_replace|subagent|agent_|teammate|workflow|ralph|job|skill|present|goal|plan|todo|memory|snapshot|rollback|incident|plugin|cordis|dsh_|dev_|import|install|reload|inject|stage|config|workspace|session|export|office|slash|command|schedule|voice|speech|team|mcp_resource)/;
+export const DANGER_TOOL_RE = /(pwsh|bash|shell|exec|spawn|process|terminal|pty|read|write|edit|file|fs_|glob|grep|patch|str_replace|subagent|agent_|teammate|workflow|ralph|job|skill|present|goal|plan|todo|memory|snapshot|rollback|incident|plugin|cordis|dsh_|dev_|import|install|reload|inject|stage|config|workspace|session|export|office|slash|command|schedule|voice|speech|team|mcp_resource|directory|cwd|cd_)/;
 
 /** 明确无害、允许出现在仿真会话 schema 里的模型侧工具。 */
 export const SAFE_MODEL_TOOLS = new Set(['ask_user_question', 'todo_write']);

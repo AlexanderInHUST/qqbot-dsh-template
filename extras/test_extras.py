@@ -646,6 +646,14 @@ class RelayTest(unittest.TestCase):
 
 
 class BiliHelpersTest(unittest.TestCase):
+    def test_half_emoji_is_dropped_so_the_reply_can_be_sent(self):
+        # JS .slice(0, 150) cut 😂 in half; json.loads keeps the lone \ud83d and the MCP reply never went out
+        raw = json.loads('{"hotComments": ["笑死\\ud83d", "好看\\ud83d\\ude02"], "n": 3}')
+        out = store.clean_text([raw, "x"])
+        self.assertEqual(out[0]["hotComments"], ["笑死", "好看😂"])
+        self.assertEqual(out[0]["n"], 3)
+        json.dumps(out, ensure_ascii=False).encode("utf-8")
+
     def test_bvid_parsing(self):
         import bili
         self.assertEqual(bili._bvid("https://www.bilibili.com/video/BV1Ranw6DEYW/?vd=1"), "BV1Ranw6DEYW")
@@ -745,6 +753,9 @@ class BiliRewatchTest(unittest.TestCase):
         db = store.load_json(os.path.join(TMP, "bili-watched.json"), {})
         self.assertEqual(list(db), ["BV1aaaaaaaa3", "BV1aaaaaaaa4", "BV1aaaaaaaa2"])
         self.assertEqual(db["BV1aaaaaaaa2"], {"title": "t2", "at": 2000, "n": 2})
+        self.assertEqual([v["bvid"] for v in bili.recent_watched(2)], ["BV1aaaaaaaa4", "BV1aaaaaaaa2"], "旧的在前，取最近的")
+        self.assertEqual(bili.recent_watched(2)[1], {"bvid": "BV1aaaaaaaa2", "title": "t2", "at": 2000.0})
+        self.assertEqual(bili.recent_watched(0), [])
 
 
 def reset(*names):
@@ -1101,6 +1112,13 @@ class PeopleItemsTest(unittest.TestCase):
             return {c["subject"]: c["card"] for c in p.pick(["qq:333333"], [], "", key=key)}
         self.assertEqual(cards("group:800000002"), {self.HUANG: "在做：在玩影之刃零"})  # 阿红's is all from home
         self.assertEqual(cards("group:1100000003"), {self.HUANG: "在做：在玩影之刃零"})  # other outside groups too
+        # 画画、做视频点名要画的人（cast）：同样按来路过滤，没卡的人也给一条
+        cast = {c["subject"]: c for c in p.cast(["900000001", "qq:1600000002", "qq:444444"], "group:800000002")}
+        self.assertEqual(cast[self.HUANG]["card"], "在做：在玩影之刃零")
+        self.assertTrue(cast[self.HUANG]["owner"])
+        self.assertEqual(cast[self.LV]["card"], "")
+        self.assertEqual(cast["qq:444444"], {"subject": "qq:444444", "aliases": [], "mine": "", "card": "", "owner": False})
+        self.assertIn("把我当女儿养", {c["subject"]: c for c in p.cast([self.HUANG], "group:1100000001")}[self.HUANG]["card"])
         for key in ("group:1100000001", "private:900000001", None):
             got = cards(key)
             self.assertEqual(got[self.HUANG], "相处：把我当女儿养\n了解：两边都说过\n在做：在玩影之刃零")
@@ -1217,6 +1235,17 @@ class LifeTest(unittest.TestCase):
         store.save_json(life.PATH, db)
         self.assertEqual(life.view()["threads"], [])
 
+    def test_thread_best_is_kept_until_beaten(self):
+        life = self.life
+        llm, _ = self.fake({"threads": [{"id": "", "title": "数字合并小游戏", "next": "接着玩", "best": "11月2日合出过 256"}]})
+        tid = life.update_threads({"items": []}, llm)["threads"][0]["id"]
+        llm, calls = self.fake({"threads": [{"id": tid, "title": "数字合并小游戏", "next": "接着玩存着的那盘", "touched": True}]})
+        out = life.update_threads({"items": ["2048 合出 128"]}, llm)
+        self.assertIn("（最好的一次：11月2日合出过 256）", calls[0][0])
+        self.assertEqual(out["threads"][0]["best"], "11月2日合出过 256", "模型漏写 best 不算清空")
+        llm, _ = self.fake({"threads": [{"id": tid, "title": "数字合并小游戏", "next": "冲 1024", "best": "11月8日合出过 512", "touched": True}]})
+        self.assertEqual(life.update_threads({"items": []}, llm)["threads"][0]["best"], "11月8日合出过 512")
+
     def test_plan_once_per_day_and_diary(self):
         life = self.life
         llm, calls = self.fake({"items": ["把芙莉莲追完", "问问爸爸面试怎么样了", "提示词写好", "第四件"]})
@@ -1249,6 +1278,25 @@ class LifeTest(unittest.TestCase):
         life.write_diary({"date": "2026-10-24", "plan": "问问爸爸几点睡（做了：问到了）"}, llm)
         self.assertIn("问问爸爸几点睡（做了：问到了）", calls[0][0])
 
+    def test_plan_progress_stored_with_date(self):
+        life = self.life
+        llm, _ = self.fake({"items": ["接着画小家伙", "问问爸爸几点睡", "攒沙雕图"]})
+        life.make_plan({"date": "2026-11-09"}, llm, now=1000)
+        llm, calls = self.fake({"progress": [{"i": 1, "status": "some", "how": "问了一嘴"}, {"i": 2, "status": "done", "how": "发了一波"}]})
+        out = life.plan_progress({"date": "2026-11-09", "key": "group:1", "lines": ["我：爸爸几点睡"], "items": [{"i": 0, "text": "别的"}]}, llm, now=2000)
+        self.assertIn("0. 接着画小家伙", calls[0][0], "带 date 用存着的那份，不信 body.items")
+        self.assertEqual([r["i"] for r in out["progress"]], [1, 2])
+        self.assertEqual(out["plan"]["progress"]["2"], {"status": "done", "how": "发了一波", "at": 2000, "key": "group:1"})
+        llm, calls = self.fake({"progress": [{"i": 1, "status": "some", "how": "又问了"}, {"i": 0, "status": "done", "how": "画好了"}]})
+        out = life.plan_progress({"date": "2026-11-09", "key": "play:main", "play": ["10:00 画了小家伙"]}, llm, now=3000)
+        self.assertNotIn("2. 攒沙雕图", calls[0][0], "做完的不再问")
+        self.assertEqual([r["i"] for r in out["progress"]], [0], "第二次 some 不改")
+        self.assertEqual(out["plan"]["progress"]["1"]["how"], "问了一嘴")
+        v = life.view(date="2026-11-09")
+        self.assertEqual(sorted(v["plan"]["progress"]), ["0", "1", "2"])
+        self.assertIsNone(life.view(date="2026-11-10")["plan"])
+        self.assertEqual(life.plan_progress({"date": "2026-11-11", "lines": ["x"]}, llm), {"ok": True, "progress": [], "plan": None})
+
     def test_think_scores_filters_and_sorts(self):
         life = self.life
         memory.note("qq:900000001", "下周三有个面试")
@@ -1269,6 +1317,19 @@ class LifeTest(unittest.TestCase):
         self.assertIn("下周三有个面试", calls[0][0])
         self.assertIn("注意：普通群，不是家里人", calls[0][0])
         self.assertEqual(life.think({"targets": []}, llm)["thoughts"], [])
+
+    def test_think_big_only_daytime_keeps_only_big_news(self):
+        life = self.life
+        sc = {"relevance": 4, "info_gap": 4, "urgency": 4, "coherence": 4, "originality": 4, "impact": 4}
+        llm, calls = self.fake({"thoughts": [
+            {"key": "group:1100000001", "thought": "看到一个好玩的视频", "kind": "share", "big": False, "scores": sc},
+            {"key": "group:1100000001", "thought": "那关卡了三天终于过了", "kind": "share", "big": True, "scores": sc},
+            {"key": "private:1600000002", "thought": "妈妈那边说说视频", "kind": "share", "big": True, "scores": sc}]})
+        out = life.think({"targets": [{"key": "group:1100000001", "label": "小群", "silenceMinutes": 90, "bigOnly": True},
+                                      {"key": "private:1600000002", "label": "妈妈的私聊", "silenceMinutes": 90}]}, llm)
+        self.assertEqual([(t["thought"], t["big"]) for t in out["thoughts"]],
+                         [("那关卡了三天终于过了", True), ("妈妈那边说说视频", False)])
+        self.assertIn("group:1100000001（小群，那边已经安静了 90 分钟）【白天只说大事】", calls[0][0])
 
 
 class SelfCheckTest(unittest.TestCase):
@@ -1479,7 +1540,9 @@ class NightModelTest(unittest.TestCase):
         }})
         memory.note("qq:900000001", "已预购影之刃零", "digest:group:800000002")
         memory.note("qq:222222", "爱打王者", "digest:group:800000002")
-        with mock.patch("consolidate.night_complete", return_value='{"ops": []}') as llm:
+        # milestones look at yesterday too once it's past their `since` (2026-11-10): not what this counts
+        with mock.patch("consolidate.night_complete", return_value='{"ops": []}') as llm, \
+                mock.patch("milestones.enabled", return_value=False):
             result = consolidate.run_once()
         self.assertEqual(llm.call_count, 1)  # only the card that changed since its last review
         self.assertIn("仔细整理", llm.call_args.args[0])
@@ -1488,6 +1551,376 @@ class NightModelTest(unittest.TestCase):
         self.assertFalse(p.get("versions"))
         self.assertGreaterEqual(p["reviewed"], p["updated"])
         self.assertFalse(people.needs_review(p))
+
+
+
+class SelfProfileTest(unittest.TestCase):
+    CARD = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "roles", "鱼妹.md"), encoding="utf-8").read() \
+        if os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "roles", "鱼妹.md")) else ""
+    SMALL = ("<!-- grow:intro -->\n> 语气是一个元气满满的小孩。\n<!-- /grow:intro -->\n"
+             "- 你叫鱼妹。<!-- grow:age -->你就是个小孩子。<!-- /grow:age -->\n"
+             "<!-- grow:traits -->\n- 爱撒娇、小狡猾：想要什么会软磨硬泡，“就一局嘛”“求求你啦”。\n<!-- /grow:traits -->\n"
+             "<!-- grow:details -->\n- 有点怕打雷和黑漆漆的地方。\n<!-- /grow:details -->\n"
+             "<!-- grow:likes -->\n- 喜欢：打游戏（尤其是太空冒险、解谜方块那种）、堆雪人、海豹。\n<!-- /grow:likes -->\n"
+             "<!-- grow:interests -->\n- 网页小游戏，越像冒险越好\n<!-- /grow:interests -->\n")
+
+    def setUp(self):
+        for f in ("self-profile.json", "memory.json", "life.json", "people.json"):
+            p = os.path.join(TMP, f)
+            if os.path.exists(p):
+                os.remove(p)
+        write("extras.json", {})
+        write("bridge.json", {"ownerQQ": "900000001", "homeGroups": ["1100000001"], "ownerTitles": {"900000001": "爸爸"}})
+
+    def born(self, days_ago):
+        import selfprofile
+        db = selfprofile._load()
+        db["born"] = (datetime.date.today() - datetime.timedelta(days=days_ago)).isoformat()
+        for it in db["items"]:
+            it["updated"] = time.time() - days_ago * 86400
+        store.save_json(selfprofile.PATH, db)
+
+    def test_seed_from_card_once_and_render(self):
+        import selfprofile
+        r = selfprofile.seed(self.SMALL)
+        self.assertEqual(r["seeded"], 7)
+        likes = [it["text"] for it in selfprofile._load()["items"] if it["sec"] == "喜欢"]
+        self.assertEqual(likes, ["打游戏（尤其是太空冒险、解谜方块那种）", "堆雪人", "海豹"])
+        self.assertTrue(selfprofile.seed(self.SMALL)["existing"])
+        out = selfprofile.render()
+        self.assertEqual(out["age"], 8)
+        self.assertIn("你今年 8 岁", out["regions"]["age"])
+        self.assertEqual(out["regions"]["likes"], "- 喜欢：打游戏（尤其是太空冒险、解谜方块那种）、堆雪人、海豹。")
+        self.assertEqual(out["regions"]["intro"], "> 语气是一个元气满满的小孩。")
+        self.assertEqual(out["regions"]["examples"], "")
+        self.assertEqual(out["drawStyle"], "")
+
+    @unittest.skipUnless(CARD, "roles/鱼妹.md not here")
+    def test_real_card_has_every_region(self):
+        import selfprofile
+        secs = {it["sec"] for it in selfprofile.parse_card(self.CARD)}
+        self.assertEqual(secs, set(selfprofile.REGIONS.values()))
+
+    def test_age_one_year_a_year_capped_and_birthday(self):
+        import selfprofile
+        today = datetime.date.today()
+        now = time.time()
+        born = today.replace(year=today.year - 1).isoformat()
+        a = selfprofile.age_at(born, now)
+        self.assertEqual(a["age"], 9)
+        self.assertTrue(a["birthday"])
+        self.assertEqual(selfprofile.age_at((today - datetime.timedelta(days=200)).isoformat(), now)["age"], 8)
+        self.assertEqual(selfprofile.age_at(today.replace(year=today.year - 20).isoformat(), now)["age"], 14)
+        self.assertFalse(selfprofile.age_at(today.isoformat(), now)["birthday"])
+
+    def test_grow_only_forward_and_recognisable(self):
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(200)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        trait = next(it for it in db["items"] if it["sec"] == "性格")
+        ops = [{"op": "grow", "id": trait["id"], "text": "完全变成了一个冷静的大人"},
+               {"op": "delete", "id": trait["id"]},
+               {"op": "grow", "id": trait["id"], "text": "爱撒娇、小狡猾：想要什么会先讲个理由，不行再软磨硬泡，“就一局嘛”。"}]
+        applied, rejected = selfprofile.apply_ops(db, ops, [], cfg, now, names=["阿明"])
+        self.assertEqual([c["op"] for c in applied], ["grow"])
+        self.assertEqual(len(rejected), 2)
+        self.assertGreater(trait["age"], 8.4)
+        # just grew: no second grow this soon
+        applied, rejected = selfprofile.apply_ops(db, ops[2:], [], cfg, now, names=[])
+        self.assertFalse(applied)
+
+    def test_prompt_tells_the_size_limits(self):
+        # 11-05~11-09 she proposed 5 changes and 4 were thrown out only for being too long: the model never saw the limits
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(200)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        prompt = selfprofile.build_prompt(db, [], cfg, now)
+        self.assertIn("每条最多 500 字", prompt)
+        self.assertIn("不超过 40 字", prompt)
+        cfg = {**cfg, "itemChars": {**cfg["itemChars"], "兴趣": 60}}
+        self.assertIn("兴趣 60 字", selfprofile.build_prompt(db, [], cfg, now))
+
+    def test_long_items_fit_and_render_one_per_line(self):
+        # 2026-11-10 the owner raised every limit to 500
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(200)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        like = next(it for it in db["items"] if it["sec"] == "喜欢")
+        self.assertIsNone(selfprofile._bad_text("好" * 500, "喜欢", cfg, []))
+        self.assertEqual(selfprofile._bad_text("好" * 501, "喜欢", cfg, []), "太长（501 字）")
+        rows = [it for it in db["items"] if it["sec"] == "喜欢"]
+        self.assertNotIn("\n", selfprofile._bullets(rows, "喜欢"))  # short ones stay on one line as before
+        like["text"] = "慢慢想的小游戏，" + "越难越想自己琢磨出来，" * 5
+        out = selfprofile._bullets(db["items"], "喜欢")
+        self.assertTrue(out.startswith("- 喜欢：\n  - "))
+        self.assertIn("\n  - " + like["text"], out)
+
+    def test_section_total_capped_and_trim_makes_room(self):
+        # 2026-11-11 the owner: 兴趣 16 items, 1600 chars in all; items only ever got longer
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(200)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        self.assertEqual((cfg["maxItems"]["兴趣"], cfg["secChars"]["兴趣"]), (16, 1600))
+        prompt = selfprofile.build_prompt(db, [], cfg, now)
+        self.assertIn("兴趣 12/1600 字", prompt)
+        self.assertIn("精简：这次不用", prompt)
+        self.assertIn("不是旧的后面加一截", prompt)
+        game = next(it for it in db["items"] if it["sec"] == "兴趣")
+        ev = [{"id": f"e{i}", "date": (datetime.date.today() - datetime.timedelta(days=i)).isoformat()} for i in range(3)]
+        add = {"op": "add", "sec": "兴趣", "text": "数独和拼图", "from": ["e0", "e1", "e2"]}
+        trim = {"op": "trim", "id": game["id"], "text": "网页小游戏，爱冒险"}
+        applied, rejected = selfprofile.apply_ops(db, [trim], ev, cfg, now, names=[])
+        self.assertEqual(rejected[0][1], "这一栏还不挤，不用精简")
+        cfg = {**cfg, "secChars": {**cfg["secChars"], "兴趣": 14}}
+        self.assertIn("兴趣", selfprofile._limits(db, cfg, now, 8.5)["crowded"])
+        applied, rejected = selfprofile.apply_ops(db, [dict(add, text="数独，一格一格推出来")], ev, cfg, now, names=[])
+        self.assertIn("加起来会有 22 字", rejected[0][1])
+        made_up = dict(trim, text="网页小游戏，打怪兽")
+        applied, rejected = selfprofile.apply_ops(db, [add, made_up, trim], ev, cfg, now, names=[])
+        self.assertEqual([c["op"] for c in applied], ["trim", "add"], "trims go first so the add fits")
+        self.assertIn("不能写进原来没有的东西", rejected[0][1])
+        self.assertEqual(game["text"], "网页小游戏，爱冒险")
+        db["changes"] = [{"time": now, **c} for c in applied]
+        self.assertEqual(selfprofile._limits(db, cfg, now, 8.5)["free"], 1, "a trim doesn't use up the week")
+
+    def test_failed_night_is_tried_again_later(self):
+        import consolidate
+        import selfprofile
+        old = selfprofile.evolve
+        try:
+            def boom(*a, **k):
+                raise OSError("[Errno -2] Name or service not known")
+            selfprofile.evolve = boom
+            self.assertTrue(consolidate.evolve_profile().startswith("failed"))
+            selfprofile.evolve = lambda *a, **k: {"applied": [{"op": "add"}]}
+            self.assertEqual(consolidate.evolve_profile(), "1 changes")
+        finally:
+            selfprofile.evolve = old
+
+    def test_new_interest_needs_her_own_evidence_on_several_days(self):
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        ev = [{"id": f"e{i}", "date": (datetime.date.today() - datetime.timedelta(days=i)).isoformat()} for i in range(3)]
+        add = {"op": "add", "sec": "兴趣", "text": "做菜的视频，看人一步步做出好吃的", "from": ["e0", "e1"]}
+        applied, rejected = selfprofile.apply_ops(db, [add], ev, cfg, now, names=[])
+        self.assertFalse(applied)
+        named = dict(add, text="跟阿明一起打游戏", **{"from": ["e0", "e1", "e2"]})
+        applied, rejected = selfprofile.apply_ops(db, [named, dict(add, **{"from": ["e0", "e1", "e2"]})], ev, cfg, now,
+                                                  names=["阿明"])
+        self.assertEqual([c["text"] for c in applied], [add["text"]])
+        self.assertIn("提到了人", rejected[0][1])
+
+    def test_free_changes_capped_per_week(self):
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(60)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        db["changes"] = [{"time": now - 3600, "op": "update"}, {"time": now - 7200, "op": "add"},
+                         {"time": now - 60, "op": "calibrate"}]
+        self.assertEqual(selfprofile._limits(db, cfg, now, 8.2)["free"], 0)
+        db["changes"] = db["changes"][1:]
+        self.assertEqual(selfprofile._limits(db, cfg, now, 8.2)["free"], 1, "calibrate doesn't use up the week")
+        db["changes"].insert(0, {"time": now - 3600, "op": "update"})
+        like = next(it for it in db["items"] if it["sec"] == "喜欢")
+        applied, rejected = selfprofile.apply_ops(db, [{"op": "fade", "id": like["id"], "text": "以前很爱堆雪人"}], [], cfg, now, names=[])
+        self.assertFalse(applied)
+        self.assertIn("这周", rejected[0][1])
+
+    def test_evidence_skips_outside_groups(self):
+        import selfprofile
+        memory.note("self", "自己玩了好久的数独", "play:main", interest=3)
+        memory.note("self", "我最喜欢吃草莓", "digest:group:1100000001")
+        memory.note("self", "我说我喜欢炒股", "digest:group:800000002")
+        ev = selfprofile._evidence(selfprofile._cfg(), time.time())
+        texts = [e["text"] for e in ev]
+        self.assertIn("自己玩了好久的数独", texts)
+        self.assertIn("我最喜欢吃草莓", texts)
+        self.assertNotIn("我说我喜欢炒股", texts)
+
+    def test_evolve_writes_version_and_rollback(self):
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(200)
+        trait = next(it for it in selfprofile._load()["items"] if it["sec"] == "性格")
+        reply = json.dumps({"ops": [{"op": "grow", "id": trait["id"],
+                                     "text": "爱撒娇、小狡猾：想要什么会先讲个理由，不行再软磨硬泡，“就一局嘛”。"}]}, ensure_ascii=False)
+        r = selfprofile.evolve(lambda prompt: reply)
+        self.assertEqual(len(r["applied"]), 1)
+        db = selfprofile._load()
+        self.assertEqual(len(db["versions"]), 1)
+        self.assertIn("先讲个理由", next(it for it in db["items"] if it["id"] == trait["id"])["text"])
+        self.assertTrue(selfprofile.rollback()["ok"])
+        self.assertNotIn("先讲个理由", next(it for it in selfprofile._load()["items"] if it["id"] == trait["id"])["text"])
+
+    def test_she_notices_likes_and_interests_not_growing_up(self):
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        self.born(200)
+        db = selfprofile._load()
+        trait = next(it for it in db["items"] if it["sec"] == "性格")
+        like = next(it for it in db["items"] if it["sec"] == "喜欢" and it["text"] == "堆雪人")
+        for it in db["items"]:
+            it["updated"] = time.time() - 100 * 86400
+        store.save_json(selfprofile.PATH, db)
+        for i, text in enumerate(["做了一道中级数独，一格没错", "换了更难的数独，卡在右下角", "数独终于解开了最难那关"]):
+            with mock.patch("memory.time.time", return_value=time.time() - i * 86400):
+                memory.note("self", text, "play:main", interest=3)
+        ids = [e["id"] for e in selfprofile._evidence(selfprofile._cfg(), time.time())]
+        reply = json.dumps({"ops": [
+            {"op": "grow", "id": trait["id"], "text": "爱撒娇、小狡猾：想要什么会先讲个理由，不行再软磨硬泡，“就一局嘛”。",
+             "notice": "你发现自己长大了"},
+            {"op": "add", "sec": "兴趣", "text": "数独，一格一格推出来", "from": ids, "notice": "你发现自己最近老想做数独"},
+            {"op": "fade", "id": like["id"], "text": "以前很爱堆雪人，最近没那么着迷了", "notice": "阿明说你不爱堆雪人了"},
+        ]}, ensure_ascii=False)
+        with mock.patch("selfprofile._names", return_value=["阿明"]):
+            r = selfprofile.evolve(lambda prompt: reply)
+        self.assertEqual([c["op"] for c in r["applied"]], ["grow", "add", "fade"])
+        self.assertNotIn("notice", r["applied"][0], "growing older stays unsaid")
+        out = selfprofile.render()
+        self.assertEqual([n["text"] for n in out["notices"]],
+                         ["你发现：以前很爱堆雪人，最近没那么着迷了", "你发现自己最近老想做数独"],
+                         "the model's line when fine, the item itself when it names someone")
+        self.assertTrue(selfprofile.rollback()["ok"])
+        self.assertEqual(selfprofile.render()["notices"], [], "rolled back: nothing to notice")
+        write("extras.json", {"selfProfile": {"noticeDays": 0}})
+        self.assertEqual(selfprofile.render()["notices"], [])
+
+
+class MilestonesTest(unittest.TestCase):
+    """成长记录：每晚挑、主人说记下来、补挑打勾、作品集、按来路给她看。"""
+
+    def setUp(self):
+        reset("milestones.json", "memory.json", "life.json", "self-profile.json", "people.json")
+        write("extras.json", {"milestones": {"since": "2000-01-01"}})
+        write("bridge.json", {"ownerQQ": 900000001, "homeGroups": ["1100000001"], "ownerTitles": {"900000001": "爸爸"},
+                              "allow": {"groups": [1100000001, 800000002], "private": []}, "deny": {}})
+        import milestones
+        self.m = milestones
+
+    def yesterday(self):
+        return (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+
+    def at(self, day, hour):
+        return self.m._day_ts(day, hour)
+
+    def test_artworks_upsert_and_reject_bad_names(self):
+        ok = self.m.add_artwork({"kind": "draw", "id": "d1", "file": "draw-20261028-101010-abcdef.jpg", "prompt": "海豹",
+                                 "key": "group:1100000001", "from": "group:1100000001", "at": 1793000000000})
+        self.assertTrue(ok["ok"])
+        self.m.add_artwork({"kind": "draw", "id": "d1", "file": "draw-20261028-101010-abcdef.jpg", "caption": "送你",
+                            "key": "group:1100000001", "at": 1793000000000})
+        self.assertEqual(len(self.m.artworks()), 1)
+        self.assertEqual(self.m.artworks()[0]["caption"], "送你")
+        self.assertFalse(self.m.add_artwork({"kind": "draw", "file": "../../etc/passwd"})["ok"])
+        self.assertFalse(self.m.add_artwork({"kind": "video", "file": "draw-20261028-101010-abcdef.jpg"})["ok"])
+        v = self.m.add_artwork({"kind": "video", "id": "v1", "file": "video-20261104-114226-a961f7.jpg",
+                                "mp4": "video-20261104-114226-a961f7.mp4", "at": 1793763746597})
+        self.assertTrue(v["ok"])
+        self.assertEqual(self.m.artworks()[-1]["mp4"], "video-20261104-114226-a961f7.mp4")
+
+    def test_night_pick_cites_that_day_and_dedupes(self):
+        day = self.yesterday()
+        with mock.patch("memory.time.time", return_value=self.at(day, 15)):
+            mid = memory.note("self", "第一次自己通关了一笔画的大关", "play:main", interest=3)["added"]
+        self.m.add_artwork({"kind": "draw", "id": "d1", "file": "draw-20261028-101010-abcdef.jpg", "prompt": "通关庆祝",
+                            "key": "group:1100000001", "at": self.at(day, 16) * 1000})
+        reply = json.dumps({"items": [
+            {"kind": "first", "title": "第一次通关一笔画大关", "text": "她卡了好久，自己想明白了，开心地画了一张画庆祝。",
+             "from": [mid, "art-d1"], "images": ["draw-20261028-101010-abcdef.jpg", "draw-20990101-000000-000000.jpg"]},
+            {"kind": "other", "title": "编出来的", "text": "没有依据的一件事。", "from": ["nope"]},
+        ]}, ensure_ascii=False)
+        prompts = []
+        done = self.m.pick_night(lambda p, n=0: prompts.append(p) or reply, now=self.at(day, 12) + 16 * 3600)
+        self.assertEqual(done[day], ["第一次通关一笔画大关"])
+        self.assertIn("第一次自己通关", prompts[0])
+        item = self.m.view()["items"][0]
+        self.assertEqual(item["images"], ["draw-20261028-101010-abcdef.jpg"])
+        self.assertEqual(item["seen"], ["group:1100000001", "play:main"])
+        self.assertEqual(item["by"], "night")
+        # the same night again: already looked at
+        self.assertEqual(self.m.pick_night(lambda p, n=0: reply, now=self.at(day, 12) + 16 * 3600), {})
+        # deleted ones are not picked again
+        self.m.delete(item["id"])
+        self.assertFalse(self.m.add({**item, "seen": item["seen"]}, "night")["ok"])
+        self.assertTrue(self.m.add({**item}, "backfill")["ok"])
+
+    def test_bad_text_refused(self):
+        day = self.yesterday()
+        self.assertFalse(self.m.add({"date": day, "title": "换了个模型", "text": "后台把模型换了。"}, "night")["ok"])
+        self.assertFalse(self.m.add({"date": day, "title": "加了好友", "text": "QQ 是 123456789。"}, "night")["ok"])
+        future = (datetime.date.today() + datetime.timedelta(days=2)).isoformat()
+        self.assertFalse(self.m.add({"date": future, "title": "以后", "text": "还没发生的事。"}, "night")["ok"])
+
+    def test_recall_anniversary_related_and_outside_filter(self):
+        today = datetime.date.today()
+        last_year = today.replace(year=today.year - 1).isoformat()
+        self.m.add({"date": last_year, "title": "第一次画画送给爸爸", "text": "她画了一只海豹送给爸爸。",
+                    "kind": "family", "seen": ["private:900000001"]}, "backfill")
+        self.m.add({"date": self.yesterday(), "title": "第一次通关数独困难", "text": "她自己在电脑上解开了困难难度的数独。",
+                    "kind": "first", "seen": ["play:main"]}, "night")
+        home = self.m.recall("group:1100000001", "")
+        self.assertEqual([x["title"] for x in home], ["第一次画画送给爸爸"])
+        self.assertEqual(home[0]["ago"], "1 年前的今天")
+        self.assertEqual(self.m.recall("group:800000002", ""), [])  # private, has 爸爸
+        out = self.m.recall("group:800000002", "你数独困难难度解开了吗")
+        self.assertEqual([x["title"] for x in out], ["第一次通关数独困难"])
+
+    def test_owner_asks_in_chat_digest_adds_it(self):
+        import digest
+        digest._BOT_ID[:] = ["1000000000"]
+        t = time.time() - 3600
+        msgs = [{"user_id": 900000001, "time": t, "message_id": 1, "message_seq": 1, "sender": {"nickname": "阿明"},
+                 "message": [{"type": "text", "data": {"text": "这是你第一次自己做视频，记到成长记录里"}}]},
+                {"user_id": 222222, "time": t + 1, "message_id": 2, "message_seq": 2, "sender": {"nickname": "路人"},
+                 "message": [{"type": "text", "data": {"text": "也记我一个"}}]}]
+        reply = {"rules": [], "facts": [], "milestones": [
+            {"title": "第一次自己做视频", "text": "她第一次自己做了一段小视频，爸爸让记下来。", "kind": "first", "from": [1]},
+            {"title": "路人让记的", "text": "别人说要记的一件事。", "kind": "other", "from": [2]}]}
+        ops = digest._parse(json.dumps(reply, ensure_ascii=False))
+        out = digest.apply(ops, "group:1100000001", {"900000001"}, {1: "900000001", 2: "222222"}, {1, 2}, {"self"},
+                           {}, "1000000000", line_time={1: t, 2: t + 1})
+        self.assertEqual(len([x for x in out["applied"] if x.startswith("milestone")]), 1)
+        item = self.m.view()["items"][0]
+        self.assertEqual((item["by"], item["seen"], item["date"]), ("owner", ["group:1100000001"], self.m._day(t)))
+        # outside groups: never, even when the owner says so there
+        reset("milestones.json")
+        out = digest.apply(ops, "group:800000002", {"900000001"}, {1: "900000001", 2: "222222"}, {1, 2}, {"self"},
+                           {}, "1000000000", line_time={1: t, 2: t + 1})
+        self.assertEqual(self.m.view()["items"], [])
+
+    def test_selfprofile_sees_home_ones_only(self):
+        import selfprofile
+        day = self.yesterday()
+        self.m.add({"date": day, "title": "第一次做视频", "text": "她做了第一段小视频。", "kind": "first",
+                    "seen": ["group:1100000001"]}, "night")
+        self.m.add({"date": day, "title": "大群里玩接龙", "text": "她在外面的群里赢了成语接龙。", "kind": "other",
+                    "seen": ["group:800000002"]}, "night")
+        ev = selfprofile._evidence({"evidenceDays": 30}, time.time())
+        self.assertEqual([e["text"] for e in ev if e["kind"] == "成长记录"], ["第一次做视频：她做了第一段小视频。"])
+
+    def test_browse_filters_by_key(self):
+        day = self.yesterday()
+        self.m.add({"date": day, "title": "第一次给爸爸画画", "text": "她画了一只海豹送给爸爸。", "kind": "family",
+                    "seen": ["private:900000001"]}, "night")
+        self.m.add({"date": day, "title": "第一次通关数独困难", "text": "她自己解开了困难的数独。", "kind": "first",
+                    "seen": ["play:main"]}, "night")
+        self.assertEqual(len(self.m.browse("private:900000001")["items"]), 2)
+        self.assertEqual([x["title"] for x in self.m.browse("group:800000002")["items"]], ["第一次通关数独困难"])
+        self.assertEqual([x["title"] for x in self.m.browse("")["items"]], ["第一次通关数独困难"])  # unknown = strict
+        self.assertEqual([x["title"] for x in self.m.browse("group:1100000001", "画画海豹")["items"]], ["第一次给爸爸画画"])
+
+    def test_import_ticked_marks_days(self):
+        day = self.yesterday()
+        r = self.m.import_ticked([{"date": day, "title": "第一次做视频", "text": "她做了第一段小视频。", "kind": "first",
+                                   "seen": ["group:1100000001"], "cid": "x"}], days=[day])
+        self.assertEqual(len(r["added"]), 1)
+        self.assertEqual(self.m.view()["items"][0]["by"], "backfill")
+        self.assertIn(day, self.m.view()["nights"])
 
 
 if __name__ == "__main__":

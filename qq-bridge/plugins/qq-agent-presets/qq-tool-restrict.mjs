@@ -22,6 +22,8 @@
 //    `tools.guard` 只能拒绝**执行**，工具名仍会出现在模型的 schema 里——
 //    那既不满足"仿真会话不得拥有本地执行能力"的注册期要求，也会诱导模型去调它。
 //    所以本地工具必须同时出现在下面的 restrict 名单里。
+import { NATIVE_TOOL_NAMES } from '../../src/qq-capabilities.js'
+
 export const name = 'qq-tool-restrict'
 
 export const inject = ['tools']
@@ -118,13 +120,19 @@ const LOCAL_EXECUTION_TOOLS = [
   // 0.2.0 新增对账（见上方长注释的 4 类判定）：
   //   ① 全局层默认启用 ⇒ 真的会进仿真会话
   'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource',
-  //   ② 派生 agent / 执行外部代码
-  'subagent_codex', 'subagent_claude_code',
+  //   ② 派生 agent / 执行外部代码（subagent_codex / subagent_claude_code 0.2.2 没了）
   'spawn_teammate', 'team_task_create', 'team_task_get', 'team_task_list', 'team_task_update',
   //   ③ 插件装载权（= 任意代码执行）
   'plugin_manager',
   //   ④ 无人值守的自我调度
-  'schedule_create', 'schedule_list', 'schedule_update', 'schedule_delete',
+  //      （0.2.2 的 schedule_update / schedule_delete 改成了 schedule_edit / schedule_view，在下面）
+  'schedule_create', 'schedule_list',
+  // 0.2.2-rc.1 对账（2026-11-08，scan-dsh-tool-names 新扫出来的；QQ preset 都没挂，执行期白名单也拒，这里是回归网）
+  'apply_patch', 'plugin_market', 'schedule_edit', 'schedule_view',
+  'session_search', 'session_trace', 'session_event_read', 'session_event_search', 'session_event_trace',
+  'terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_list', 'terminal_close',
+  // 0.2.2 的 working_directory（读、改当前目录；dsh-tool-working-directory 在全局层，QQ 会话都继承，2026-11-08 看会话记录才发现）
+  'working_directory',
   // 已装但当前未进 bundles 的插件（一旦加回就是新口子）
   'dev_mode_set', 'dev_mode_status', 'dev_mode_subagent',
 ]
@@ -178,6 +186,8 @@ const SAFE_PREFIXES = [
 const SAFE_EXACT = new Set([
   'ask_user_question',
   'todo_write',
+  // qqbot_agent：QQ 原生工具（qq-native-tools 行注册，能力表 src/qq-capabilities.js，2026-11-08）
+  ...NATIVE_TOOL_NAMES,
 ])
 
 // qqbot_agent：沙箱前缀整体放行，但其中个别工具等于在沙箱里执行任意代码，单独拒绝。
@@ -232,6 +242,10 @@ export function apply(ctx, config = {}) {
   // qqbot_agent：守卫行 config.hideTools 列这个 preset 用不着的工具（全名），从工具清单里藏起来、执行时也拒绝。
   // 2026-10-24 数过三天的会话记录：二代模式里旧的只读工具、qq_send_group_message 这些从没调过，每次请求白带着它们的说明。
   const hideTools = Array.isArray(config?.hideTools) ? config.hideTools.filter((n) => typeof n === 'string' && n) : []
+  // config.hidePrefixes：整个 MCP 都不给（qq-play 不要 snowluma 的 MCP 工具，QQ 的事只用原生工具，2026-11-08）。
+  // 名字是 MCP 连上以后才有的，靠下面的扫描藏；执行时和 hideTools 一样拒。
+  const hidePrefixes = Array.isArray(config?.hidePrefixes) ? config.hidePrefixes.filter((n) => typeof n === 'string' && n) : []
+  const isHidden = (name) => hideTools.includes(name) || hidePrefixes.some((prefix) => name.startsWith(prefix))
   // 名字现在不存在的先记下来，执行期白名单仍然兜底。
   const pending = new Set()
   for (const name of [...KNOWN_DANGEROUS_GLOBAL_TOOLS, ...SANDBOX_DENIED_TOOLS, ...hideTools]) {
@@ -244,6 +258,7 @@ export function apply(ctx, config = {}) {
   // 守卫行 config.hideOtherSide:false 回到只在执行时拒绝。
   // 同一遍扫描顺手把别的 MCP 下叫 browser_run_code_unsafe 的也藏起来。
   const hideSide = side && config?.hideOtherSide !== false
+  const byPrefix = (name) => hidePrefixes.some((prefix) => name.startsWith(prefix))
   const canScan = typeof ctx.tools.schemas === 'function'
   const hidden = new Set()
   const hideOtherSide = () => {
@@ -257,7 +272,7 @@ export function apply(ctx, config = {}) {
     for (const name of names) {
       if (hidden.has(name)) continue
       const otherSide = hideSide && (side.exact.includes(name) || side.prefixes.some((prefix) => name.startsWith(prefix)))
-      if (!otherSide && !isCodeExec(name)) continue
+      if (!otherSide && !isCodeExec(name) && !byPrefix(name)) continue
       if (restrictOne(name)) hidden.add(name)
     }
   }
@@ -269,6 +284,7 @@ export function apply(ctx, config = {}) {
   // restrict 自己也会触发 tools/change，用 busy 挡住重入。
   if ((pending.size || canScan) && typeof ctx.on === 'function') {
     let busy = false
+    const logged = { added: 0, timer: null }
     let dispose
     dispose = ctx.on('tools/change', () => {
       if (busy) return
@@ -284,10 +300,28 @@ export function apply(ctx, config = {}) {
       } finally {
         busy = false
       }
-      if (hidden.size > before) console.error(`[qq-tool-restrict] 按名字又藏起 ${hidden.size - before} 个工具（另一边的浏览器、执行代码的；共 ${hidden.size}）`)
+      // MCP 的工具是一个一个注册的，每个都会触发一次 tools/change：攒 2 秒记一行
+      if (hidden.size > before) {
+        logged.added += hidden.size - before
+        logged.timer ??= setTimeout(() => {
+          console.error(`[qq-tool-restrict] 按名字又藏起 ${logged.added} 个工具（另一边的浏览器、执行代码的、hidePrefixes 的；共 ${hidden.size}）`)
+          logged.added = 0
+          logged.timer = null
+        }, 2000)
+        logged.timer.unref?.()
+      }
       // MCP 重连可能带来新工具，能扫就一直听着
       if (!pending.size && !canScan) dispose?.()
     })
+  }
+
+  // 这个 preset 现在有没有这个原生工具（play 没有 qq_tell_myself，socialV2.tools 关掉的也没注册）
+  const nativeVisible = (bare) => {
+    try {
+      return typeof ctx.tools.schemas === 'function' && ctx.tools.schemas().some((s) => s?.name === bare)
+    } catch {
+      return false
+    }
   }
 
   // 2) 执行期白名单：任何不在允许范围内的工具调用都会被拒绝。
@@ -295,7 +329,14 @@ export function apply(ctx, config = {}) {
     const name = exec?.name
     if (typeof name !== 'string' || name.length === 0) return '工具名无效，已拒绝'
     if (isCodeExec(name)) return `工具 "${name}" 在沙箱里等于执行任意代码，已拒绝`
-    if (hideTools.includes(name)) return `工具 "${name}" 在这里用不着，已拒绝`
+    if (isHidden(name)) {
+      // 换成原生工具的 MCP 版（2026-11-08）：压缩前的会话记录里都是老名字，模型照着调，告诉它新名字，别让它以为发不了
+      const bare = name.startsWith('mcp__snowluma__') ? name.slice('mcp__snowluma__'.length) : ''
+      if (bare && NATIVE_TOOL_NAMES.includes(bare) && nativeVisible(bare)) {
+        return `${name} 改名了，现在叫 ${bare}（前面不带 mcp__snowluma__，不用填 key 和 token，别的参数照旧），用 ${bare} 再调一次`
+      }
+      return `工具 "${name}" 在这里用不着，已拒绝`
+    }
     if (SAFE_EXACT.has(name)) return
     if (side && (side.exact.includes(name) || side.prefixes.some((prefix) => name.startsWith(prefix)))) return `工具 "${name}" ${side.reason}`
     if (SAFE_PREFIXES.some((prefix) => name.startsWith(prefix))) return

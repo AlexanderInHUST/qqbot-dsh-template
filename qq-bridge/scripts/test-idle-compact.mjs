@@ -47,13 +47,13 @@ test('同一会话两次至少隔 minIntervalMinutes（默认 60）；排的时�
   assert.equal(runs.length, 1, '刚压过不再压');
   // 排计时器：推到上次后 60 分钟
   h.scheduleIdleCompactV2('group:456');
-  const timer = h.idleCompactTimers.get('group:456');
-  assert.ok(timer);
-  assert.ok(timer._idleTimeout > 50 * 60000, `推迟了：${timer._idleTimeout}`);
+  const dueIn = (key) => h.scheduler.dueAt(`idle-compact:${key}`) - Date.now();
+  assert.ok(h.scheduler.has('idle-compact:group:456'));
+  assert.ok(dueIn('group:456') > 50 * 60000, `推迟了：${dueIn('group:456')}`);
   // 别的会话不受影响
   setTokens('group:789', 120000);
   h.scheduleIdleCompactV2('group:789');
-  assert.equal(h.idleCompactTimers.get('group:789')._idleTimeout, 120000);
+  assert.ok(Math.abs(dueIn('group:789') - 120000) < 1000, `安静 2 分钟：${dueIn('group:789')}`);
   // 过了一小时可以再压
   h.idleCompactLastAt.set('group:456', Date.now() - 61 * 60000);
   await h.runIdleCompactV2('group:456');

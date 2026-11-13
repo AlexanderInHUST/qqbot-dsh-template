@@ -3,3 +3,7 @@
 *.patch -text
 *.png binary
 *.jpg binary
+*.hta -text
+# Windows 的批处理要 CRLF（qq-bridge 的 start.bat / restart.bat，test-audit-setup-guards 会查）
+*.bat text eol=crlf
+*.cmd text eol=crlf

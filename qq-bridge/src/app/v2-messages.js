@@ -143,9 +143,11 @@ export function createV2Messages(app) {
   // 别人的消息，以前完全看不到“去玩的自己”刚在同一个群里说了什么，会把同一件事再讲一遍或者说反
   // （2026-10-22 大群：play 已经发完看视频的感想，聊天那边还在说“还没看完”）。等待结果和唤醒快照里
   // 用 yourPlaySelfSent 交给聊天会话，交过一次就标 shownToChat，不再重复给。
+  // 从别的聊天窗口用 qq_send_elsewhere 发过来的（tell-myself.js）也走这条路，另外带 relayFrom / from。
   const PLAY_SENT_WINDOW_MS = 30 * 60 * 1000;
-  const PLAY_SENT_HINT = 'yourPlaySelfSent 是自由时间那边的你刚刚发到这里的，大家已经看到了：接着它往下聊，别再讲一遍，也别说得和它矛盾。';
-  function selfSenderFieldsV2(byPlay) {
+  const PLAY_SENT_HINT = 'yourPlaySelfSent 是自由时间那边的你刚刚发到这里的（带 from 的是你在 from 那个窗口里发过来的，比如那边有人让你来这里说一声），大家已经看到了：接着它往下聊，别再讲一遍，也别说得和它矛盾。';
+  function selfSenderFieldsV2(byPlay, relay = null) {
+    if (byPlay && relay?.relayFrom) return { sender: `我（在${relay.relayFromLabel || '别的窗口'}那边发过来的）`, byPlay: true, relayFrom: relay.relayFrom, ...(relay.relayFromLabel ? { relayFromLabel: relay.relayFromLabel } : {}) };
     return byPlay ? { sender: '我（自由时间那边的我发的）', byPlay: true } : { sender: '我' };
   }
   function unseenPlaySentV2(st) {
@@ -154,7 +156,7 @@ export function createV2Messages(app) {
       .filter((m) => m && m.byPlay && !m.shownToChat && Number(m.time) > after);
   }
   function playSentViewV2(list) {
-    return list.slice(-12).map((m) => ({ text: m.text, time: m.time }));
+    return list.slice(-12).map((m) => ({ text: m.text, time: m.time, ...(m.relayFrom ? { from: m.relayFromLabel || '别的窗口' } : {}) }));
   }
   function markPlaySentShownV2(list) {
     if (!list?.length) return;
@@ -170,7 +172,7 @@ export function createV2Messages(app) {
     for (let i = 0; i < list.length; i++) {
       const text = redactKnownTokensOnly(String(list[i] ?? '')).slice(0, 200);
       st.recentMessages.push({
-        ...selfSenderFieldsV2(opts.byPlay),
+        ...selfSenderFieldsV2(opts.byPlay, opts),
         text,
         plain: text,
         quoteTargetIsSelf: false,

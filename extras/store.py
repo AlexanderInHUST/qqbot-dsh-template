@@ -30,6 +30,24 @@ def save_json(path: str, data) -> None:
     os.replace(tmp, path)
 
 
+_LONE_SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+
+def clean_text(value):
+    """Drop lone UTF-16 surrogates from every string in a tool result. JS .slice() in the browser can
+    cut an emoji in half; the MCP server then can't encode the reply and the call never returns
+    (2026-11-05 12:15 a bili_watch hung play:main for two and a half days)."""
+    if isinstance(value, str):
+        return _LONE_SURROGATE.sub("", value)
+    if isinstance(value, list):
+        return [clean_text(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(clean_text(v) for v in value)
+    if isinstance(value, dict):
+        return {clean_text(k): clean_text(v) for k, v in value.items()}
+    return value
+
+
 def state_path(name: str) -> str:
     return os.path.join(DATA_DIR, name)
 
