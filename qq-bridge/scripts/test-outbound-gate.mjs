@@ -11,11 +11,10 @@ async function test(name, run) {
 const config = { sendDelayMs: 0, socialV2: { nightSleep: { enabled: false } } };
 const sentHttp = (h) => h.calls.http.filter((c) => /send_(group|private)_msg$/.test(c.url));
 
-await test('二代模式：legacy 发不出去，记进拦下的', async () => {
+await test('legacy 发不出去，记进拦下的', async () => {
   const h = await bridgeHarness({ config });
   try {
-    h.setMode('reserved2');
-    await h.sendToQQ('group:456', '⏰ 等待回答超时，已取消该请求');
+    await h.sendToQQ('group:456', '⏰ 等待回答超时，已取消该请求', 'legacy');
     assert.deepEqual(h.calls.sent, []);
     const snap = h.outboundSnapshot();
     assert.equal(snap.blocked, 1);
@@ -24,20 +23,9 @@ await test('二代模式：legacy 发不出去，记进拦下的', async () => {
   } finally { await h.close(); }
 });
 
-await test('老模式：legacy 照发', async () => {
-  const h = await bridgeHarness({ config });
-  try {
-    h.setMode('chat');
-    await h.sendToQQ('group:456', '你好');
-    assert.equal(h.calls.sent.length, 1);
-    assert.equal(h.outboundSnapshot().recent.at(-1).ok, true);
-  } finally { await h.close(); }
-});
-
 await test('系统提示只去主人通知的地方', async () => {
   const h = await bridgeHarness({ config });
   try {
-    h.setMode('reserved2');
     await h.notifyOwnerOnly('group:456', '⚠️ agent 处理出错：x');
     await h.sendChain;
     assert.equal(h.calls.sent.length, 1);
@@ -52,7 +40,6 @@ await test('系统提示只去主人通知的地方', async () => {
 await test('她的话：走 HTTP，白名单外和带令牌的拦下', async () => {
   const h = await bridgeHarness({ config });
   try {
-    h.setMode('reserved2');
     await h.onebotSend('group', '456', '在呢', null, null);
     assert.equal(sentHttp(h).length, 1);
     assert.equal(h.outboundSnapshot().recent.at(-1).origin, 'her');
@@ -69,7 +56,6 @@ await test('她的话：走 HTTP，白名单外和带令牌的拦下', async () 
 await test('表情、图走同一个关卡', async () => {
   const h = await bridgeHarness({ config });
   try {
-    h.setMode('reserved2');
     await h.sendImageBufferV2('group:456', Buffer.from('png'));
     assert.equal(sentHttp(h).length, 1);
     const last = h.outboundSnapshot().recent.at(-1);

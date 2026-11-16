@@ -471,8 +471,11 @@ export function createV2Messages(app) {
       packet.recent.reverse();
     } else if (v2ToolEnabled('getRecent') && maxRecent > 0) {
       const unread = new Set(st.unread.map((m) => m.seq));
+      // 放进 yourPlaySelfSent 的（30 分钟内的）不重复放；更早的、一直没给过的照常留在 recent 里，
+      // 不然 play 发过去半小时没人叫她，那几句就从她这边消失了（11-02、11-09 妈妈回“好可爱”她对不上）
+      const inPlaySent = new Set(unseenPlaySentV2(st));
       const recent = st.recentMessages.filter((m) => (!Number.isSafeInteger(m.seq) || !unread.has(m.seq))
-        && !(m.byPlay && !m.shownToChat)).slice(-maxRecent);
+        && !inPlaySent.has(m)).slice(-maxRecent);
       for (const msg of recent.reverse()) if (!tryAdd('recent', msg)) break;
       packet.recent.reverse();
     }

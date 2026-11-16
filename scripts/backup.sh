@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.."
 # 和 docker-compose.yml 顶部的 name: 一致
 PROJECT="${COMPOSE_PROJECT_NAME:-qqbot_agent}"
 # SnowLuma 的三个卷里有 QQ 登录态，恢复后不用重新扫码
-VOLUMES="dsh-home bridge-state qq-gateway-data qq-client-config qq-client-data sandbox-browser extras-state"
+VOLUMES="dsh-home bridge-state qq-gateway-data qq-client-config qq-client-data sandbox-browser extras-state yumei-files"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUT="${1:-backups/$STAMP}"
 mkdir -p "$OUT"

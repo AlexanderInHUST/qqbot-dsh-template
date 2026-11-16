@@ -6,7 +6,7 @@ import { SENSITIVE_RE } from '../sensitive.js';
 
 export function createSelfCheck(app) {
   const {
-    PLAY_KEY, api, cfg, isSessionAllowedInCurrentMode, log, redactKnownTokensOnly
+    PLAY_KEY, api, cfg, isSessionAllowed, log, redactKnownTokensOnly
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let SELF_CLAIMS_KEEP_MS, SELF_CLAIMS_MAX, chatLinesV2, condPromiseSaidV2, convLabelV2,
@@ -51,7 +51,7 @@ export function createSelfCheck(app) {
   let selfCheckInFlight = 0;
   function queueSelfCheckV2(key, list) {
     const c = selfCheckCfgV2();
-    if (!c.enabled || key === PLAY_KEY || app.currentMode !== 'reserved2') return;
+    if (!c.enabled || key === PLAY_KEY) return;
     const texts = (Array.isArray(list) ? list : []).map((m) => redactKnownTokensOnly(String(m ?? '')).replace(/\s+/g, ' ').trim().slice(0, 200)).filter(Boolean);
     if (!texts.length) return;
     const q = selfCheckQueue.get(key) || { texts: [], timer: null };
@@ -119,7 +119,7 @@ export function createSelfCheck(app) {
   const selfCheckSteers = []; // 最近一小时插过的【说岔了】时间
   async function runSelfCheckV2(key, texts) {
     const c = selfCheckCfgV2();
-    if (!c.enabled || !isSessionAllowedInCurrentMode(key)) return null;
+    if (!c.enabled || !isSessionAllowed(key)) return null;
     const said = texts.filter(selfTalkWorthCheckingV2);
     if (!said.length) return null;
     if (selfCheckInFlight >= 2) { log(`[自洽] ${key} 同时在查的太多，这批跳过`); return null; }

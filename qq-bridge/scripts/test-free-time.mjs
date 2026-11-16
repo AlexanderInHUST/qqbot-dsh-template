@@ -64,7 +64,6 @@ await test('换口味：同一样占了 3/4 以上才劝，劝的是别的活动
 await test('桥接：自由时间唤醒带上念头，计数游戏/新页面/搜索，劝说里换口味', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { sessionMinutes: [60, 60] } } } });
   try {
-    h.setMode('reserved2');
     // 自由时间在单独的 play:main 会话里过，聊天会话不再收到 proactiveCheck
     h.getSocialV2State('private:123').bootstrapSent = true;
     await h.sendWakePromptV2('private:123', 'proactiveCheck');
@@ -124,7 +123,6 @@ await test('桥接：自由时间唤醒带上念头，计数游戏/新页面/搜
 await test('桥接：按时间劝她多玩；到点、睡觉时间、劝了不动、被托去办事都放她走', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { sessionMinutes: [60, 60], maxSessionMinutes: 180 } } } });
   try {
-    h.setMode('reserved2');
     const key = 'play:main';
     const st = h.getSocialV2State(key);
     await h.sendWakePromptV2(key, 'proactiveCheck');
@@ -164,7 +162,6 @@ await test('桥接：按时间劝她多玩；到点、睡觉时间、劝了不�
 await test('桥接：读过的文章记下来，以后再打开插一句【看过了】、不算新看的；列表页、游戏、热榜不管', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { sessionMinutes: [60, 60] } } } });
   try {
-    h.setMode('reserved2');
     const key = 'play:main';
     const st = h.getSocialV2State(key);
     await h.sendWakePromptV2(key, 'proactiveCheck');
@@ -227,7 +224,6 @@ await test('桥接：读过的文章记下来，以后再打开插一句【看�
 await test('桥接：被托去办的事办完就行，不劝她多玩', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { sessionMinutes: [60, 60] } } } });
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('play:main');
     await h.sendWakePromptV2('play:main', 'goPlay');
     assert.equal(st.freeTime.minUntil, 0);
@@ -238,7 +234,6 @@ await test('桥接：被托去办的事办完就行，不劝她多玩', async ()
 await test('桥接：到了定的时间说一声可以歇了；玩满上限或到了睡觉时间让她收尾；各插一次', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { sessionMinutes: [60, 60], maxSessionMinutes: 180 } } } });
   try {
-    h.setMode('reserved2');
     const key = 'play:main';
     const st = h.getSocialV2State(key);
     await h.sendWakePromptV2(key, 'proactiveCheck');
@@ -274,7 +269,6 @@ await test('桥接：到了定的时间说一声可以歇了；玩满上限或�
 await test('桥接：别的会话最近的事带进唤醒，大群只看到私聊的条数；托自由时间去玩', async () => {
   const h = await bridgeHarness({ config: { allow: { private: ['123'], groups: ['456', '789'] }, ownerTitles: { 123: '爸爸' }, socialV2: { crossSession: { summaryOnlyKeys: ['group:789'] } } } });
   try {
-    h.setMode('reserved2');
     const now = Date.now();
     const msg = (sender, text, isSelf = false) => ({ sender, text, plain: text, isSelf, time: now - 60000 });
     h.getSocialV2State('private:123').recentMessages.push(msg('私聊', '晚上一起看番吗'), msg('我', '好呀', true));
@@ -302,7 +296,6 @@ await test('桥接：别的会话最近的事带进唤醒，大群只看到私�
 await test('桥接：配了 homeGroups 时，普通群只看到私聊、家里群、别的群聊过几条；心情原因也不带过去', async () => {
   const h = await bridgeHarness({ config: { allow: { private: ['123'], groups: ['456', '789', '999'] }, homeGroups: ['456'], ownerTitles: { 123: '爸爸' } } });
   try {
-    h.setMode('reserved2');
     const now = Date.now();
     const msg = (sender, text, isSelf = false) => ({ sender, text, plain: text, isSelf, time: now - 60000 });
     h.getSocialV2State('private:123').recentMessages.push(msg('私聊', '晚上一起看番吗'));

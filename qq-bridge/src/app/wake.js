@@ -5,7 +5,7 @@ import { proactiveSlot } from '../proactive-schedule.js';
 export function createWake(app) {
   const {
     PLAY_KEY, TURN_BUSY_LEASE_MS, appendActivity, armPendingWakeLease, cfg, collectors,
-    compactingKeys, deliverPrompt, disarmPendingWakeLease, isSessionAllowedInCurrentMode, log,
+    compactingKeys, deliverPrompt, disarmPendingWakeLease, isSessionAllowed, log,
     markReadCalledKeys, pendingWakeKeys, playEnabledV2, promptQueues, turnLeaseNoted, v2TurnStartAt,
     wakeConfigMissCount, wakeConfigUpdatedKeys
   } = app;
@@ -28,7 +28,7 @@ export function createWake(app) {
     }
     const rc = cfg.socialV2?.malformedRetry ?? {};
     const max = Math.max(0, Number(rc.max ?? 2) || 0);
-    if (rc.enabled === false || app.currentMode !== 'reserved2' || socialV2.paused) return false;
+    if (rc.enabled === false || socialV2.paused) return false;
     const n = (malformedRetryCounts.get(key) ?? 0) + 1;
     if (n > max) {
       malformedRetryCounts.delete(key);
@@ -49,8 +49,8 @@ export function createWake(app) {
 
   async function sendWakePromptV2(key, reason) {
     if (cfg.socialV2?.enabled === false) return;
-    if (app.currentMode !== 'reserved2' || socialV2.paused) return;
-    if (!isSessionAllowedInCurrentMode(key)) {
+    if (socialV2.paused) return;
+    if (!isSessionAllowed(key)) {
       log(`[reserved2] 跳过唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
     }
@@ -252,7 +252,7 @@ export function createWake(app) {
     if (cfg.socialV2?.enabled === false) return;
     if (socialV2.paused) return;
     if (nightSleepBlocksV2(key, reason)) return;
-    if (!isSessionAllowedInCurrentMode(key)) {
+    if (!isSessionAllowed(key)) {
       log(`[reserved2] 跳过计划唤醒 ${key}（${reason}）：会话已不在当前模式允许范围内`);
       return;
     }
@@ -386,7 +386,7 @@ export function createWake(app) {
 
   function setupSleepTimerV2(key) {
     if (cfg.socialV2?.enabled === false) return;
-    if (!isSessionAllowedInCurrentMode(key)) return;
+    if (!isSessionAllowed(key)) return;
     const st = getSocialV2State(key);
     cancelSleepTimerV2(key);
     if (socialV2.paused) return;
@@ -451,7 +451,7 @@ export function createWake(app) {
 
   function freeTimeTickV2() {
     if (cfg.socialV2?.proactive?.enabled === false) return;
-    if (socialV2.paused || app.currentMode !== 'reserved2') return;
+    if (socialV2.paused) return;
     if (!socialV2.proactiveNextAt) socialV2.proactiveNextAt = Date.now() + proactiveIntervalV2();
     runGlobalProactiveCheckV2();
   }
@@ -459,8 +459,8 @@ export function createWake(app) {
   // 名字沿用以前的（各处在会话出现、模式切换时调它）；现在只是确保全局的 free-time-check 登记着
   function scheduleProactiveCheckV2(key) {
     if (cfg.socialV2?.proactive?.enabled === false) return;
-    if (socialV2.paused || app.currentMode !== 'reserved2') return;
-    if (!isSessionAllowedInCurrentMode(key)) return;
+    if (socialV2.paused) return;
+    if (!isSessionAllowed(key)) return;
     if (!socialV2.proactiveNextAt) socialV2.proactiveNextAt = Date.now() + proactiveIntervalV2();
     if (!app.scheduler.has('free-time-check')) app.scheduler.every('free-time-check', 60 * 1000, freeTimeTickV2);
   }

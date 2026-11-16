@@ -14,7 +14,6 @@ async function fixture(run, socialV2 = {}, globals = {}) {
   const h = await bridgeHarness({ globals, config: { ownerQQ: '42', allow: { private: ['42'], groups: ['456'] }, socialV2: {
     wake: { preSleepWaitEnabled: false }, proactive: { enabled: false }, sticker: { enabled: false }, ...socialV2,
   } } });
-  h.setMode('reserved2');
   try { await run(h); } finally { await h.close(); }
 }
 

@@ -135,7 +135,6 @@ await test('初始提示词只出现在 bootstrap 唤醒，且只给配置的那
 await test('agent token 既读不到初始提示词，也改不了它', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('reserved2');
     h.setInitialPrompt('group:456', ENV_TEXT);
     await withServer(h, async (port) => {
       const asAgent = { ...ADMIN, 'x-agent-token': 'fixture-agent-token', 'x-agent-call': '1' };
@@ -229,7 +228,6 @@ await test('initial-prompts.json 损坏时降级为只读，保存失败且原�
 await test('手动唤醒在会话未 bootstrap 时必须走 bootstrap（否则初始提示词永远发不出去）', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('reserved2');
     h.setInitialPrompt('group:456', ENV_TEXT);
     await withServer(h, async (port) => {
       const first = await call(port, '/api/socialV2/wake', { method: 'POST', headers: ADMIN, body: { key: 'group:456', reason: 'admin' } });
@@ -257,7 +255,6 @@ await test('手动唤醒在会话未 bootstrap 时必须走 bootstrap（否则�
 await test('端到端：群消息进线触发的首次唤醒，投递给 DSH 的 prompt 带初始提示词', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 1000 } } } });
   try {
-    h.setMode('reserved2');
     h.setInitialPrompt('group:456', ENV_TEXT);
     const event = {
       self_id: 999,

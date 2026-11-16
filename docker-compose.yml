@@ -13,12 +13,6 @@
 # 固定项目名：卷名都是 qqbot_agent_<卷>，换了目录名（例如迁移到 WSL）也不会变成一套新卷
 name: qqbot_agent
 
-x-control-volumes: &control-volumes
-  - dsh-home:/data/dsh
-  - bridge-state:/opt/qq-bridge/state
-  - ./config/qq-bridge/config.json:/opt/qq-bridge/config.json
-  - ./roles:/opt/qq-bridge/roles
-
 services:
   dsh:
     build:
@@ -65,7 +59,13 @@ services:
       TZ: Asia/Shanghai   # 唤醒提示里的“当前时间”、夜间降低主动概率都按这个时区
       AIOHUB_API_KEY: ${AIOHUB_API_KEY:-}   # qq_draw 画画（socialV2.draw，aiohub 的图像模型）
     network_mode: "service:dsh"
-    volumes: *control-volumes
+    volumes:
+      - dsh-home:/data/dsh
+      - bridge-state:/opt/qq-bridge/state
+      - ./config/qq-bridge/config.json:/opt/qq-bridge/config.json
+      - ./roles:/opt/qq-bridge/roles
+      # 她的文件夹（src/app/files.js）：只有 bridge 和 extras（4 点清理）挂，dsh 和沙箱都看不到
+      - yumei-files:/opt/qq-bridge/files
     depends_on: [dsh, snowluma]
     restart: unless-stopped
 
@@ -139,6 +139,8 @@ services:
       - extras-state:/data
       - ./config/extras.json:/config/extras.json:ro
       - ./config/qq-bridge/config.json:/config/qq-bridge.json:ro
+      # 她的文件夹：4 点整理记忆时把她不记得了的文件删掉（workspace.py），别的时候不碰
+      - yumei-files:/files
     # Linux / WSL 上绑定挂载的文件权限是真的：config.json 属于宿主机用户（uid/gid 1000）、权限 640，
     # extras 以 uid 10002 运行，靠加入 gid 1000 才能读到它（Mac 的 Docker Desktop 不检查这个）
     group_add: ["1000"]
@@ -165,7 +167,7 @@ services:
     pull_policy: never
     environment:
       TZ: Asia/Shanghai
-    # 单向中转：agent-net 上的 dsh → 沙箱的 MCP 和两块屏的 noVNC
+    # 单向中转：agent-net 上的 dsh → 沙箱的 MCP、两块屏的 noVNC 和读文件（8934，bridge 用）
     command:
       - sh
       - -c
@@ -175,6 +177,7 @@ services:
         socat TCP-LISTEN:8933,fork,reuseaddr TCP:sandbox:8933 &
         socat TCP-LISTEN:6080,fork,reuseaddr TCP:sandbox:6080 &
         socat TCP-LISTEN:6082,fork,reuseaddr TCP:sandbox:6082 &
+        socat TCP-LISTEN:8934,fork,reuseaddr TCP:sandbox:8934 &
         wait
     networks: [agent-net, sandbox-net]
     depends_on: [sandbox]
@@ -244,3 +247,4 @@ volumes:
   qq-client-data: {}
   sandbox-browser: {}  # 沙箱浏览器的登录态（比如 B 站 cookie）
   extras-state: {}     # 长期记忆 memory.json、搬图记录 relay.json、记忆整理水位 digest.json
+  yumei-files: {}      # 她的文件夹：别人发给她的、她自己写的文件，每个聊天一个目录（2026-11-16）

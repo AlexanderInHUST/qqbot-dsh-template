@@ -19,7 +19,6 @@ await test('睡觉时间：群友 @ 不醒，主人 @ 才醒，且提示她是�
   // 00:01~00:00 几乎覆盖全天，测试任何时刻跑都处在睡觉时间
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 1000 }, nightSleep: { enabled: true, from: '00:01', to: '00:00' } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(777, 1, [text('大家好')]), h.cfg);
     await h.handleIncoming('group', '456', msg(777, 2, [atSelf, text('醒醒，在吗？')]), h.cfg);
     await sleep(1600);
@@ -38,7 +37,6 @@ await test('睡觉时间：群友 @ 不醒，主人 @ 才醒，且提示她是�
 await test('extraOwnerQQ 里的人也算主人：睡觉时能叫醒她', async () => {
   const h = await bridgeHarness({ config: { extraOwnerQQ: ['888'], socialV2: { wake: { batchWindowMs: 1000 }, nightSleep: { enabled: true, from: '00:01', to: '00:00' } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(777, 1, [text('大家好')]), h.cfg);
     await h.handleIncoming('group', '456', msg(888, 2, [atSelf, text('起来')]), h.cfg);
     for (let i = 0; i < 60 && !h.calls.prompts.length; i += 1) await sleep(50);
@@ -49,7 +47,6 @@ await test('extraOwnerQQ 里的人也算主人：睡觉时能叫醒她', async (
 await test('没配 nightSleep 时行为不变', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 1000 } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(777, 1, [text('大家好')]), h.cfg);
     for (let i = 0; i < 60 && !h.calls.prompts.length; i += 1) await sleep(50);
     assert.equal(h.calls.prompts.length, 1, '首条消息照常 bootstrap');

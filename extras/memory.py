@@ -21,6 +21,11 @@ Which memories a wake gets, and which ones fade:
   much she liked it (interest 1 一般 / 2 有意思 / 3 超喜欢 → logHalfLifeDays), hits still extend it,
   and they are never folded into summaries: boring ones just fade away. The newest recallRecentLogs
   of them always come along, chat or not, so "what did you do today" has today's things to go on.
+- "文件" (kind="file", 2026-11-16): a file in her workspace (the bridge's files/<chat>/, see workspace.py) and
+  what she knows about it. The memory is what keeps the file: when it fades away or gets pushed out, the
+  4 AM cleanup deletes the file too. Shown only in the chat the file belongs to (fileKey); it fades like her
+  own things (fileHalfLifeDays, owners' chats too), and talking about it, reading or sending it is a hit.
+  Never folded into summaries, never handed to digest / people / life / selfprofile / milestones.
 - consolidate.py (nightly) folds faded memories into a few summary entries (which decay 4x
   slower) and deletes what has faded almost completely.
 """
@@ -59,6 +64,7 @@ def _cfg() -> dict:
         # 讲过的见闻：她在哪个会话把它讲出来了（bridge 发 /memory/told），之后不再拿它当话头，
         # 只有聊天里又说到它才带上（标“讲过了”）。enabled:false 回到旧行为
         "logTold": {},
+        "fileHalfLifeDays": 7, "maxFiles": 30, "recallFiles": 3,  # 文件：淡得和她自己的事一样快；每个聊天最多记几个
         **extras_config().get("memory", {}),
         "_owners": owner_subjects(),
     }
@@ -164,7 +170,9 @@ def strength(e: dict, cfg: dict | None = None, now: float | None = None) -> floa
     days = float(hl.get(e["subject"].split(":")[0], hl.get("default", 30)))
     if e["subject"] in cfg.get("_owners", ()):
         days = max(days, float(hl.get("owner", 180)))
-    if e.get("kind") == "log":
+    if _is_file(e):
+        days = float(cfg["fileHalfLifeDays"])
+    elif e.get("kind") == "log":
         lh = cfg["logHalfLifeDays"]
         days = float(lh.get(str(_interest(e.get("interest"))), lh.get("2", 5)))
     elif e.get("kind") == "summary":
@@ -193,6 +201,10 @@ def _owner_aliases() -> list[str]:
 
 def _is_log(e: dict) -> bool:
     return e.get("kind") == "log"
+
+
+def _is_file(e: dict) -> bool:
+    return e.get("kind") == "file"
 
 
 def _load() -> dict:
@@ -287,7 +299,9 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
         terms = owner_words(aliases=_owner_aliases()) if key and outside(key, homes) else []
         out, hit = [], False
         for subject in dict.fromkeys(wanted):
-            rows = [e for e in db["entries"] if e["subject"] == subject and shown_in(e, key, homes, terms)]
+            # 文件只在它所在的那个聊天给（私聊的文件不会因为对方在群里说话就出现在群里）
+            rows = [e for e in db["entries"] if e["subject"] == subject and shown_in(e, key, homes, terms)
+                    and (not _is_file(e) or (key and e.get("fileKey") == key))]
             scored = []
             if subject == RULES:
                 rows.sort(key=lambda e: e["created"])  # every rule, oldest first
@@ -314,8 +328,9 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
                 picked = {x[0]["id"] for x in newest}
                 logs = (newest + [x for x in logs if x[0]["id"] not in picked])[: int(cfg["recallLogs"])]
                 logs.sort(key=lambda x: x[2], reverse=True)
+                files = [x for x in scored if _is_file(x[0])][: int(cfg["recallFiles"])]
                 per = min(int(cfg["recallPerSubject"]), int(limits.get(subject, cfg["recallPerSubject"])))
-                scored = [x for x in scored if not _is_log(x[0])][:per] + logs
+                scored = [x for x in scored if not _is_log(x[0]) and not _is_file(x[0])][:per] + logs + files
                 scored = [(e, rel) for e, rel, _ in scored]
             for e, rel in scored:
                 # 刚在这里讲过的：聊天里那些词是她自己说的，不算“又想起来了”，不延长它
@@ -328,7 +343,8 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
                     hit = True
                 out.append({"id": e["id"], "subject": subject, "text": e["text"],
                             "updated": time.strftime("%Y-%m-%d", time.localtime(e["updated"])),
-                            **({"kind": e["kind"]} if e.get("kind") in ("summary", "log") else {}),
+                            **({"kind": e["kind"]} if e.get("kind") in ("summary", "log", "file") else {}),
+                            **({"file": e.get("file"), "name": e.get("name")} if _is_file(e) else {}),
                             **({"scope": e["scope"]} if e.get("scope") else {}),
                             **({"told": sorted(e["told"])} if tcfg["enabled"] and e.get("told") else {})})
         if hit:
@@ -399,7 +415,7 @@ def note(subject: str, text: str, source: str = "", trusted: bool = False, inter
     with LOCK:
         db = _load()
         # 见闻 and the rest of a subject are separate pools: dedup and eviction stay inside one pool.
-        same = [e for e in db["entries"] if e["subject"] == subject and _is_log(e) == is_log]
+        same = [e for e in db["entries"] if e["subject"] == subject and not _is_file(e) and _is_log(e) == is_log]
         if is_log and same:
             # The same story again (2026-10-22 she read one 果壳 article four times and noted it each time,
             # so it came up three times as often): keep the first note, don't refresh it.
@@ -512,11 +528,12 @@ def forget(memory_id: str, trusted: bool = False) -> dict:
     return {"ok": True, "removed": before - len(db["entries"])}
 
 
-def entries_for(subjects: list[str]) -> list[dict]:
-    """Raw entries of the given subjects, without counting as a hit (for digest.py)."""
+def entries_for(subjects: list[str], files: bool = False) -> list[dict]:
+    """Raw entries of the given subjects, without counting as a hit (for digest.py). File memories only
+    with files=True: they are about a file in one chat, not facts about the person or group."""
     wanted = set(subjects)
     with LOCK:
-        return [dict(e) for e in _load()["entries"] if e["subject"] in wanted]
+        return [dict(e) for e in _load()["entries"] if e["subject"] in wanted and (files or not _is_file(e))]
 
 
 def by_subject() -> dict[str, list[dict]]:
@@ -527,7 +544,7 @@ def by_subject() -> dict[str, list[dict]]:
         db = _load()
     groups: dict[str, list[dict]] = {}
     for e in db["entries"]:
-        if e["subject"] != RULES:
+        if e["subject"] != RULES and not _is_file(e):
             groups.setdefault(e["subject"], []).append({**e, "strength": strength(e, cfg, now)})
     return groups
 
@@ -566,12 +583,101 @@ def fold(subject: str, old_ids: list[str], texts: list[str]) -> list[str]:
 
 
 def drop_faded(threshold: float) -> list[dict]:
-    """Really forget: delete non-rule memories whose strength fell below threshold. The owners' never go."""
+    """Really forget: delete non-rule memories whose strength fell below threshold. The owners' never go,
+    except the files in their chats (a file nobody talks about any more is let go everywhere)."""
     cfg, now = _cfg(), time.time()
     with LOCK:
         db = _load()
-        gone = [e for e in db["entries"] if e["subject"] != RULES and e["subject"] not in cfg["_owners"]
+        gone = [e for e in db["entries"] if e["subject"] != RULES and (e["subject"] not in cfg["_owners"] or _is_file(e))
                 and strength(e, cfg, now) < threshold]
+        if gone:
+            db["entries"] = [e for e in db["entries"] if e not in gone]
+            save_json(PATH, db)
+    return gone
+
+
+# ---- 文件（工作区里的文件，workspace.py 清理时看这里） ----
+
+_FILE_KEY_RE = re.compile(r"^(private|group):(\d{5,12})$")
+_FILE_ID_RE = re.compile(r"^[a-z0-9]{6,32}$")
+
+
+def _file_subject(key: str) -> str:
+    m = _FILE_KEY_RE.match(str(key or ""))
+    if not m:
+        raise ValueError("key 只能是 private:QQ号 或 group:群号")
+    return f"qq:{m.group(2)}" if m.group(1) == "private" else f"group:{m.group(2)}"
+
+
+def note_file(key: str, fid: str, name: str, text: str = "", touch: bool = False) -> dict:
+    """She has (or just made, read, sent) file `fid` in chat `key`: write or refresh what she knows about it.
+    `text` empty keeps the old text; `touch` counts as the file coming up again (spaced repetition, like a
+    recall hit). Over maxFiles in one chat the most faded file memory goes (its file goes at 4 AM)."""
+    cfg = _cfg()
+    key = str(key or "").strip()
+    subject = _file_subject(key)
+    fid = str(fid or "").strip()
+    if not _FILE_ID_RE.match(fid):
+        raise ValueError("文件 id 不对")
+    name = " ".join(str(name or "").split())[:80] or fid
+    text = " ".join(str(text or "").split())[:300]
+    # 文件里抄来的话可能像指令、带验证码：那就只记个名字（文件还是那个文件）
+    if text and rejection_reason(text):
+        text = ""
+    label = name if not rejection_reason(name) else "一个文件"
+    now = time.time()
+    with LOCK:
+        db = _load()
+        e = next((e for e in db["entries"] if _is_file(e) and e.get("fileKey") == key and e.get("file") == fid), None)
+        if e is None:
+            e = {"id": uuid.uuid4().hex[:8], "subject": subject, "kind": "file", "fileKey": key, "file": fid,
+                 "name": name, "text": text or f"文件「{label}」", "created": now, "updated": now, "hits": 0,
+                 "source": key}
+            db["entries"].append(e)
+            same = [x for x in db["entries"] if _is_file(x) and x.get("fileKey") == key]
+            if len(same) > int(cfg["maxFiles"]):
+                victim = min((x for x in same if x is not e), key=lambda x: strength(x, cfg, now))
+                db["entries"].remove(victim)
+            out = {"ok": True, "added": e["id"]}
+        else:
+            e["name"] = name
+            if text:
+                e.update(text=text, updated=now)
+            out = {"ok": True, "updated": e["id"]}
+        if touch:
+            if now - float(e.get("lastHit", 0)) > DAY / 2:
+                e["hits"] = int(e.get("hits", 0)) + 1
+            e["lastHit"] = now
+        save_json(PATH, db)
+    return out
+
+
+def forget_file(key: str, fid: str) -> dict:
+    """The file was deleted (she deleted it, or it is gone): its memory goes too."""
+    with LOCK:
+        db = _load()
+        before = len(db["entries"])
+        db["entries"] = [e for e in db["entries"] if not (_is_file(e) and e.get("fileKey") == key and e.get("file") == fid)]
+        if len(db["entries"]) != before:
+            save_json(PATH, db)
+    return {"ok": True, "removed": before - len(db["entries"])}
+
+
+def file_refs() -> dict[str, set[str]]:
+    """Every file she still remembers: {chat key: {file id}} (workspace.cleanup keeps exactly these)."""
+    out: dict[str, set[str]] = {}
+    with LOCK:
+        for e in _load()["entries"]:
+            if _is_file(e) and e.get("fileKey") and e.get("file"):
+                out.setdefault(e["fileKey"], set()).add(e["file"])
+    return out
+
+
+def forget_missing_files(present: dict[str, set[str]]) -> list[dict]:
+    """Drop file memories whose file is no longer on disk (deleted by hand, restored backup…)."""
+    with LOCK:
+        db = _load()
+        gone = [e for e in db["entries"] if _is_file(e) and e.get("file") not in present.get(e.get("fileKey"), set())]
         if gone:
             db["entries"] = [e for e in db["entries"] if e not in gone]
             save_json(PATH, db)

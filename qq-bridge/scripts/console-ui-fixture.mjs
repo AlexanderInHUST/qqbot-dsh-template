@@ -286,7 +286,7 @@ function usageRecentFixture() {
 
 export function makeFixtureState() {
   return {
-    mode: 'reserved2', role: '小鲸鱼', roleMode: 'active', closedAgentPreset: '', paused: false,
+    role: '小鲸鱼', roleMode: 'active', paused: false,
     roles: ['小鲸鱼', '温柔助手', '技术伙伴'],
     roleContents: {
       小鲸鱼: '# 小鲸鱼\n\n- 性格：好奇、爱接梗，遇到不懂的会直接问\n- 说话风格：简短，偶尔用 emoji',
@@ -295,7 +295,7 @@ export function makeFixtureState() {
     },
     simPrompts: {
       'qq-chat-v2': '你是 QQ 群里的仿真群友。\n\n【二代仿真模式 —— 安全规则（最高优先级，不可违反）】\n1. 你没有本地工具。\n\n【二代仿真模式 —— 工具协议（最高优先级）】\n1. 文本输出不会自动发送到 QQ。',
-      'qq-chat': '你是 QQ 群里的仿真群友（一代）。\n\n【一代仿真模式 —— 安全规则】\n1. 你没有本地工具。\n\n【一代仿真模式 —— 工具协议】\n1. 回复会自动转发到 QQ。',
+      'qq-chat': '你在帮忙整理群里的黑话。\n\n【安全规则】\n1. 你没有本地工具。\n\n【输出】\n1. 只输出候选词条，不会发到 QQ。',
     },
     roleInjectMax: 6000,
     dshEffort: 'max',
@@ -305,19 +305,6 @@ export function makeFixtureState() {
       { key: 'group:100003', sessionId: 'demo-development-20260920', owner: false },
       { key: 'private:100001', sessionId: 'demo-owner-20260920', owner: true },
     ],
-    social: {
-      triggerProbability: 0.2, activeCheckMinMs: 10000, activeCheckMaxMs: 30000,
-      activeReplyDelayMinMs: 1000, activeReplyDelayMaxMs: 3000, activeDurationEnabled: true,
-      activeDurationMinMs: 180000, activeDurationMaxMs: 600000, idleWindowMs: 300000,
-      idleRetryProbability: 0.4, idleRetryWaitMs: 120000, skipProbability: 0.15,
-      surrenderProbability: 0.08, contextWindow: 20, maxReplyChars: 500,
-      burstEnabled: true, burstIntervalMinMs: 1000, burstIntervalMaxMs: 3000,
-      longGapProbability: 0.1, longGapMinMs: 2500, longGapMaxMs: 5000,
-      mustReplyKeywords: ['小鲸鱼', 'DeepSeek'], proactiveEnabled: true,
-      proactiveIdleThresholdMs: 1800000, proactiveCheckMinMs: 300000,
-      proactiveCheckMaxMs: 900000, proactiveProbability: 0.2,
-    },
-    socialStates: { 'group:123456789': { phase: 'active' }, 'group:100003': { phase: 'idle' } },
     v2: { enabled: true, agentPreset: 'qq-chat-v2', provideRecommendations: true, tools: {} },
     // 会话初始提示词（离线示例）：整段内容都是虚构的演示文本。
     initPrompt: '离线示例：这是一个演示用的群聊环境说明，不会写进任何真实配置。',
@@ -340,8 +327,8 @@ export function makeFixtureState() {
 }
 
 /** Bind only to loopback. Mutations affect this server's disposable in-memory state. */
-export async function startConsoleFixture({ port = 0, original = false, htmlPath, logWrites = false } = {}) {
-  const file = htmlPath || resolve(projectRoot, original ? 'scripts/fixtures/console.before.html' : 'public/console.html');
+export async function startConsoleFixture({ port = 0, htmlPath, logWrites = false } = {}) {
+  const file = htmlPath || resolve(projectRoot, 'public/console.html');
   await readFile(file); // Fail early rather than displaying a broken preview.
   const state = makeFixtureState();
   const requests = [];
@@ -376,8 +363,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       }
       if (method === 'GET') {
         switch (path) {
-          case '/api/status': return json({ ok: true, dshReady: true, mode: state.mode, role: state.role, roleMode: state.roleMode, closedAgentPreset: state.closedAgentPreset, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
-          case '/api/presets': return json({ presets: [{ id: 'qq-chat-v2', trust: 'user' }, { id: 'qq-chat', trust: 'user' }] });
+          case '/api/status': return json({ ok: true, dshReady: true, role: state.role, roleMode: state.roleMode, ownerQQ: state.whitelist.ownerQQ, allowGroups: state.whitelist.allow.groups, allowPrivate: state.whitelist.allow.private, activity: '[08:30:00] 演示桥接已连接\n[08:30:12] group:123456789 · 已处理一条消息\n[08:30:20] 二代社交助手正在运行\n以上均为离线模拟数据。' });
           case '/api/roles': return json({
             roles: state.roles.slice(),
             summaries: state.roles.map((name) => {
@@ -448,8 +434,6 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           });
           case '/api/whitelist': return json(state.whitelist);
           case '/api/sessions': return json({ sessions: state.sessions });
-          case '/api/pending': return json({ pending: [{ key: 'group:123456789', kind: 'approval', toolName: '演示工具', reason: '等待管理员确认（离线示例）' }] });
-          case '/api/social': return json({ config: state.social, states: state.socialStates, pendingSummaries: { 'group:123456789': 2 } });
           case '/api/socialV2/config': return json({ ok: true, config: state.v2 });
           case '/api/socialV2/activity': return json({ ok: true, paused: state.paused });
           case '/api/socialV2/tool-log': return json({ ok: true, entries: state.toolLog });
@@ -509,7 +493,6 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
       }
       if (method === 'POST') {
         switch (path) {
-          case '/api/mode': state.mode = body.mode; state.closedAgentPreset = body.closedAgentPreset; return json({ ok: true, dshSynced: true });
           case '/api/role': state.role = body.role; return json({ ok: true });
           case '/api/roles/create': state.roles.push(body.name); state.roleContents[body.name] = body.content ?? ''; return json({ ok: true, role: body.name, warnings: [] });
           case '/api/roles/update': state.roleContents[body.name] = body.content ?? ''; return json({ ok: true, role: body.name, chars: String(body.content ?? '').length, warnings: [] });
@@ -544,8 +527,6 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
           case '/api/dsh/effort': state.dshEffort = body.reasoningEffort; return json({ ok: true, reasoningEffort: body.reasoningEffort });
           case '/api/role-mode': state.roleMode = body.mode; return json({ ok: true });
           case '/api/whitelist': state.whitelist = body; return json({ ok: true });
-          case '/api/social': state.social = body; return json({ ok: true });
-          case '/api/social/state': state.socialStates[body.key] = { phase: body.phase }; return json({ ok: true });
           case '/api/socialV2/config': state.v2 = body; return json({ ok: true });
           case '/api/socialV2/activity': state.paused = body.paused; return json({ ok: true });
           case '/api/socialV2/tool-log/clear': state.toolLog = []; return json({ ok: true });
@@ -589,7 +570,6 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
             else state.slang.forEach(x => { if (ids.includes(x.id)) x.status = path.endsWith('confirm') ? 'confirmed' : 'rejected'; });
             return json({ ok: true, count: ids.length, confirmed: ids.length, rejected: ids.length, deleted: ids.length });
           }
-          case '/api/social/flush':
           case '/api/socialV2/wake':
           case '/api/socialV2/memory-clear':
           case '/api/socialV2/memory-update':
@@ -618,7 +598,7 @@ export async function startConsoleFixture({ port = 0, original = false, htmlPath
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const value = name => args.find(x => x.startsWith(`${name}=`))?.slice(name.length + 1);
-  const fixture = await startConsoleFixture({ port: Number(value('--port') || 4173), original: args.includes('--original'), htmlPath: value('--html') ? resolve(value('--html')) : undefined, logWrites: true });
+  const fixture = await startConsoleFixture({ port: Number(value('--port') || 4173), htmlPath: value('--html') ? resolve(value('--html')) : undefined, logWrites: true });
   console.log(`Offline console preview: ${fixture.url}\nAll data is synthetic; writes stay in memory.\nRecorded requests: ${fixture.url}/__fixture/requests`);
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => { await fixture.close(); process.exit(0); });
 }

@@ -21,7 +21,6 @@ async function fixture(run, { modelFallback = {}, probe = async () => ({ status:
   } });
   const selected = [];
   h.api.sessions.selectModel = async (p) => { selected.push(p); return { result: { ok: true, value: { selected: p } } }; };
-  h.setMode('reserved2');
   try { await run({ h, selected, probes }); } finally { await h.close(); }
 }
 

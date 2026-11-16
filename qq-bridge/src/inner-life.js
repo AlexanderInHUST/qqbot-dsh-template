@@ -132,6 +132,9 @@ export function initiateCfg(c = {}) {
     unansweredResetDays: n(c.unansweredResetDays, 3),
     minSilenceMinutes: n(c.minSilenceMinutes, 60),
     beforeBedMinutes: n(c.beforeBedMinutes, 0), // >0：只在离这晚睡觉不到这么多分钟时才找（睡前分享），0 = 不管
+    // 她这么多小时内在那里说过的话（最多 toldLines 句）带给 extras 想念头、写进唤醒提示，讲过的别再讲一遍（2026-11-15），0 = 不带
+    toldHours: n(c.toldHours, 18),
+    toldLines: n(c.toldLines, 12),
     answerWindowMinutes: { private: n(c.answerWindowMinutes?.private, 360), group: n(c.answerWindowMinutes?.group, 30) },
     from: String(c.from ?? '09:00'),
     to: String(c.to ?? '22:30'),

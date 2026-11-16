@@ -67,11 +67,13 @@
 ### 怎么说话
 
 - **像人打字**：长话拆成几条，每条之间按字数停顿（`send.human`）。一次最多几条有上限，私聊和家里的群 4 条、大群 2 条。发到一半对方插话了，后面的就不发。
-- **表情包**：她有自己的收藏，能看懂别人发的表情包在表达什么，也能用 `qq_sticker_note` 记下“这张什么时候发”，挑着发（`qq_send_sticker`），还能收藏别人的（`qq_collect_sticker`）。
+- **表情包**：她有自己的收藏，能看懂别人发的表情包在表达什么，也能用 `qq_sticker_note` 记下“这张什么时候发”，挑着发（`qq_send_sticker`），还能收藏别人的（`qq_collect_sticker`）。提示里的收藏按最久没发的排在前面，这两天发多了的标“换一张别的”，免得老发那几张；收藏少时鼓励她多收。
 - **引用、拍一拍、截图**：`qq_reply` 引用某条回，`qq_send_poke` 拍人，`qq_send_screenshot` 把浏览器当前页截给大家看。
 - **画画、做视频**：`qq_draw` 用中转站的图像模型画一张小孩子画风的画（风格跟着年龄换），`qq_make_video` 做一段几秒的带声音的小视频。工具马上返回，排着队在后台做，做好了 bridge 自己发出去，再告诉她。`people` 里填群友的 QQ，就按他们的头像和她对他们的印象画成卡通人物。有每天的限额。
 - **沙雕图**：从配置好的 Telegram 频道挑图搬进群（`qq_send_meme`），有严格的频率限制。
 - **语音**（默认关）：从你准备好的音频目录里挑一段发。
+- **说法别老一个样**：数她这几天在各处反复用的说法和老开头，唤醒时告诉她，发出去的话里又用上了也提醒一句。自由时间的她往聊天里发话前，先看一眼聊天那边的自己刚说过什么，免得讲两遍；主动找人时也带上今天在那里讲过的话。
+- **文件**：群友发的文件她能存下来看（pdf、Word、Excel、PPT 在沙箱里转成字），也能自己写 txt / md / csv、发文件。每个聊天一个文件夹，互相看不见；文件跟着记忆走，她不再记得的夜里清掉。
 - **黑话**：群里的新词、梗会被记下来，她能查（`qq_slang_query`）也能自己补充。
 - **像个小孩**：大群里有人聊芯片、财报这类大人的话题，她查完了会像小孩转述那样说（“我看到说……好像是因为……吧”），不念一串型号数字、不分条讲课。提示里写了，搜索结果里也带着这句提醒。
 
@@ -136,9 +138,10 @@
 ### 管理
 
 - bridge 不替她在 QQ 里说话：没有 `/` 管理命令（`/` 开头的话和别的话一样给她看），DSH 重启时消息只排队，不回“服务重启中”，DSH 的提问、审批自动跳过。重置会话、暂停都在控制台做。
-- bridge 有一个控制台网页（:3100）：运行模式、人格卡、各会话状态、令牌和花费看板、手动触发唤醒、她长大的档案和成长记录等。
+- bridge 有一个控制台网页（:3100）：人格卡、各会话状态、令牌和花费看板、手动触发唤醒、她长大的档案和成长记录等。
 - 出错（模型返回坏掉的工具参数且自动重试也失败、工具卡住被看门狗停掉等）只告诉 `ownerQQ`：发到他的私聊，私聊不在白名单里或者设了不主动找（`noReachOut`）就发到家里的小群，不会在别的群里报错。
 - DeepSeek 官方连不上（超时、502、两分钟一个字都不出）时自动把所有会话换到中转站的备用模型，每 5 分钟看一眼官方通了没，通了换回来（`modelFallback`）。只记日志。
+- 收消息卡住（和 SnowLuma 的连接断了或一直没有事件）3 分钟自己重连，10 分钟还没好私聊告诉 `ownerQQ`。
 - 看门狗：一个工具调用一小时没结果、或者一轮半小时没动静，就停掉这一轮，排着的消息接着给她（`watchdog`）。
 
 ## 架构
@@ -196,6 +199,7 @@
 | `qq-gateway-data`、`qq-client-config`、`qq-client-data` | SnowLuma 和 QQ 的登录态。**删了要重新扫码** |
 | `sandbox-browser` | 两个浏览器的资料目录（B 站登录 cookie） |
 | `extras-state` | `memory.json`、`people.json`、`life.json`、`self-profile.json`（长大的档案）、`milestones.json`（成长记录和作品集）、`digest.json`、`relay.json`、B 站看过的记录、日志 |
+| `yumei-files` | 她放文件的地方，每个聊天一个文件夹（只有 bridge 和 extras 挂） |
 
 ### 一条消息怎么变成一句回复
 
@@ -273,26 +277,26 @@ QQ 的工具大多是 DSH 的原生工具：能力表在 `qq-bridge/src/qq-capab
 
 ### qq-bridge 的代码
 
-`qq-bridge/` 是从上游 v0.2.0-r4（commit a56164e7）分出来的。上游的一代模式和其他角色模式还在，没删；这里用的是二代仿真模式 `reserved2`。
+`qq-bridge/` 是从上游 v0.2.0-r4（commit a56164e7）分出来的。只留了二代仿真模式 `reserved2`：上游的一代模式、closed-agent、模式切换、多角色都删了，权限边界见 `qq-bridge/RULES.md`。
 
 | 位置 | 内容 |
 |---|---|
-| `src/bridge.js` | 入口：连 SnowLuma、收发消息、出口关卡 `qqOut`、会话管理、老功能（约 5 千行） |
-| `src/app/` | 二代社交，28 个模块，每个是 `createX(app)`，返回 `{exports, link(), start()}` |
+| `src/bridge.js` | 入口：连 SnowLuma、收发消息、出口关卡 `qqOut`、会话管理（约 3900 行） |
+| `src/app/` | 二代社交，30 个模块，每个是 `createX(app)`，返回 `{exports, link(), start()}` |
 | `src/app/wake.js`、`wake-triggers.js`、`wake-prompt.js` | 唤醒：叫不叫、怎么合并、提示词怎么拼 |
 | `src/app/v2-state.js`、`v2-messages.js` | 每个会话的状态、消息列表、已读位置 |
 | `src/app/self-now.js`、`self-check.js`、`life.js`、`tell-myself.js`、`growth.js`、`away.js` | 【你现在】、自检、心情、生活、主动找人、捎话和替这里去别处说句话、长大、不在过和打游戏限时 |
 | `src/app/free-time.js`、`reminders.js`、`night-sleep.js`、`idle-compact.js` | 自由时间、提醒、睡觉、闲时压缩 |
-| `src/app/human-send.js`、`reply-timing.js`、`media.js`、`stickers.js`、`voice.js`、`slang.js` | 发话、等对方说完和发前看一眼、图片、表情包、语音、黑话 |
+| `src/app/human-send.js`、`reply-timing.js`、`media.js`、`stickers.js`、`voice.js`、`slang.js`、`phrasing.js` | 发话、等对方说完和发前看一眼、图片、表情包、语音、黑话、老说法 |
 | `src/app/jobs.js`、`draw.js`、`video.js`、`cast.js` | 要等一会儿的活（排队、做好了发、告诉她）和留话、画画、做视频、画里的人 |
+| `src/app/files.js` | 她放文件的地方（存、读、写、发，文档交给沙箱解析） |
 | `src/app/model-fallback.js`、`watchdog.js` | 官方连不上换备用模型、看门狗 |
 | `src/app/console-server.js` | 控制台网页和给工具调的 `/api/socialV2/*` |
-| `src/reply-gate.js`、`inner-life.js`、`free-time.js`、`proactive-schedule.js`、`qq-model-view.js`、`v2-wait.js`、`privacy-policy.js`、`qq-capabilities.js` | 纯函数：门控算法、心情、活动菜单、作息表、给模型看的消息格式、等待逻辑、家里和外面怎么分、原生工具的能力表 |
+| `src/reply-gate.js`、`inner-life.js`、`free-time.js`、`proactive-schedule.js`、`qq-model-view.js`、`v2-wait.js`、`privacy-policy.js`、`qq-capabilities.js`、`repeat-phrases.js`、`rx-watch.js` | 纯函数：门控算法、心情、活动菜单、作息表、给模型看的消息格式、等待逻辑、家里和外面怎么分、原生工具的能力表、数老说法、收消息卡住的判断 |
 | `src/mcp-snowluma-safe.js`、`mcp-web-search-safe.js`、`mcp-host-server.js` | DSH 起的 stdio MCP 服务 |
-| `dsh/agent-presets/` | 三个 preset：`qq-chat-v2`（聊天）、`qq-play`（自由时间）、`qq-chat`（一代） |
+| `dsh/agent-presets/` | 三个 preset：`qq-chat-v2`（聊天）、`qq-play`（自由时间）、`qq-chat`（黑话学习） |
 | `plugins/qq-agent-presets/` | DSH 插件：人格卡注入、原生工具、工具隐藏、preset 补丁 |
 | `scripts/` | 构建脚本、`setup-dsh.mjs`（每次启动把 preset 和 MCP 配进 DSH）、`test-*.mjs` 离线测试 |
-| `roles/` | 上游自带的示例角色。容器里这个目录被根目录的 `roles/` 挂载盖掉，实际用的是那里 |
 
 状态存在 bridge 卷的 `state/social-v2/`，分块存（她自己、自由时间、要等的活、提醒、运行状态，每个聊天一份），改动后 1 秒防抖存盘，只写变了的块，退出前先存，写坏了读上一份。定时的事都登记在 `src/scheduler.js`，到点时间存在状态里，重启后接着算。
 
@@ -571,7 +575,7 @@ docker compose exec extras cat /data/life.json       # 今天想、日记、手�
 ### 备份、恢复、迁移
 
 ```bash
-scripts/backup.sh                         # 备份七个卷和配置、人格卡到 backups/<时间>/
+scripts/backup.sh                         # 备份八个卷和配置、人格卡到 backups/<时间>/
 docker compose down && scripts/restore.sh backups/<时间>   # 恢复卷（配置和人格卡在 config-and-roles.tar.gz 里，自己解压）
 scripts/migrate-export.sh                 # 打一个迁移包（含全部密钥和 QQ 登录态，小心保管）
 scripts/migrate-import.sh <迁移包>         # 在新机器上导入
@@ -580,7 +584,7 @@ scripts/migrate-import.sh <迁移包>         # 在新机器上导入
 自动备份（`scripts/backup-auto.sh`，开头写着全部用法）：
 
 ```bash
-scripts/backup-auto.sh install            # 装 systemd 用户定时器：每天 05:20 备份她自己的数据，每周日 05:40 备份七个卷（不带会话里的图和浏览器缓存）
+scripts/backup-auto.sh install            # 装 systemd 用户定时器：每天 05:20 备份她自己的数据，每周日 05:40 备份八个卷（不带会话里的图和浏览器缓存）
 scripts/backup-auto.sh status             # 本机和网盘的每天、每周、图各一行
 ```
 
@@ -701,7 +705,6 @@ docker compose build && docker compose up -d
 - **图片**：DeepSeek 只看 GIF 的第一帧（这里抽帧拼图绕过去了）；中转站一次请求超过 32 张图会报错，`config/dsh/home.cordis.patch.yml` 给每个 pi-ai 供应商写了 `maxRequestImages: 28`，新加供应商也要写上。
 - **Gemini 慢**：走中转站时私聊一轮约 30 秒、群里一分多钟，工具 schema 里的 `null` 联合类型也要补丁去掉。
 - **SnowLuma 上游没了。** 它的 GitHub 仓库、Docker Hub 镜像、文档站都已经 404，`docker-compose.yml` 里钉死的 v1.14.22 镜像新机器上多半拉不下来，GitHub 上有别人留的存档。本机有镜像就 `docker save` 存一份，别 `docker image prune -a`。哪天腾讯不让这版 QQ 登录了，要换成还在维护的 OneBot 实现（比如 NapCat），bridge 里依赖 SnowLuma 的地方列在 CLAUDE.md 的“坑”里。
-- **上游的一代模式和别的角色模式代码还在**，没删，只是不用。改 `bridge.js` 时会看到。
 - **名字写死的地方**：`extras/consolidate.py` 的整理提示、`extras/digest.py` 识别“在聊机器人”的正则里写着“鱼妹”，换人设时要改（见[换人设](#换人设)）。
 
 ## 许可和致谢

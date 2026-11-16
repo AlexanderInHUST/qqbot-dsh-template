@@ -65,7 +65,7 @@ try {
     }
     const pkg = JSON.parse(fs.readFileSync(path.join(f.home, 'profiles/web/package.json')));
     assert.equal(pkg.dependencies.existing, '1.0.0');
-    assert.deepEqual(pkg.dsh.profile.bundles, ['existing', 'qq-mode-console', 'qq-agent-presets']);
+    assert.deepEqual(pkg.dsh.profile.bundles, ['existing', 'qq-agent-presets']);
   });
 
   test('legacy root [] is repaired without altering literal strings', () => {
@@ -92,19 +92,35 @@ try {
     assert.equal(fs.existsSync(path.join(f.home, '.agent-presets')), false);
   });
 
-  test('existing mode, DSH settings and non-link plugin directory remain untouched', () => {
-    const f = fixture('preserve', '[]\n');
-    fs.mkdirSync(path.join(f.repo, 'state'), { recursive: true });
-    const mode = '{"mode":"closed-agent","closedAgentPreset":"custom"}\n';
-    fs.writeFileSync(path.join(f.repo, 'state/mode.json'), mode);
+  test('a non-link plugin directory is never replaced', () => {
+    const blocker = fixture('plugin-conflict', '[]\n');
+    fs.mkdirSync(path.join(blocker.home, 'plugins/qq-agent-presets'), { recursive: true });
+    fs.writeFileSync(path.join(blocker.home, 'plugins/qq-agent-presets/keep.txt'), 'keep');
+    assert.notEqual(blocker.run().status, 0);
+    assert.equal(fs.readFileSync(path.join(blocker.home, 'plugins/qq-agent-presets/keep.txt'), 'utf8'), 'keep');
+  });
+
+  test('the retired qq-mode-console bundle is cleaned out of an old DSH_HOME', () => {
+    const f = fixture('retired', '- id: qq-mode\n  name: qq-mode-console\n  config:\n    mode: reserved2\n- insert:\n    - id: custom\n      name: custom\n');
+    const pkgFile = path.join(f.home, 'profiles/web/package.json');
+    fs.writeFileSync(pkgFile, JSON.stringify({ name: 'old', dependencies: { existing: '1.0.0', 'qq-mode-console': 'link:/x' }, dsh: { profile: { bundles: ['existing', 'qq-mode-console'] } } }));
+    const target = path.join(f.home, 'gone');
+    fs.mkdirSync(target);
+    fs.mkdirSync(path.join(f.home, 'plugins'), { recursive: true });
+    fs.mkdirSync(path.join(f.home, 'profiles/web/node_modules'), { recursive: true });
+    fs.symlinkSync(target, path.join(f.home, 'plugins/qq-mode-console'), 'junction');
+    fs.symlinkSync(target, path.join(f.home, 'profiles/web/node_modules/qq-mode-console'), 'junction');
     const result = f.run();
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(fs.readFileSync(path.join(f.repo, 'state/mode.json'), 'utf8'), mode);
-    const blocker = fixture('plugin-conflict', '[]\n');
-    fs.mkdirSync(path.join(blocker.home, 'plugins/qq-mode-console'), { recursive: true });
-    fs.writeFileSync(path.join(blocker.home, 'plugins/qq-mode-console/keep.txt'), 'keep');
-    assert.notEqual(blocker.run().status, 0);
-    assert.equal(fs.readFileSync(path.join(blocker.home, 'plugins/qq-mode-console/keep.txt'), 'utf8'), 'keep');
+    const doc = yaml.load(fs.readFileSync(f.patchFile, 'utf8'));
+    assert.equal(JSON.stringify(doc).includes('qq-mode'), false);
+    assert.ok(doc.flatMap((op) => op.insert || []).some((e) => e.id === 'custom'));
+    const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+    assert.equal('qq-mode-console' in pkg.dependencies, false);
+    assert.deepEqual(pkg.dsh.profile.bundles, ['existing', 'qq-agent-presets']);
+    assert.equal(fs.existsSync(path.join(f.home, 'plugins/qq-mode-console')), false);
+    assert.equal(fs.existsSync(path.join(f.home, 'profiles/web/node_modules/qq-mode-console')), false);
+    assert.ok(fs.existsSync(target), 'link target untouched');
   });
 
   if (process.platform === 'win32') test('Windows runs the npm .cmd shim with literal profile arguments', () => {

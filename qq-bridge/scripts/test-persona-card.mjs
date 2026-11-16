@@ -67,7 +67,6 @@ await test('bridge：二代唤醒时把人格卡写进 state/role-card-v2.md，�
     files: { 'roles/测试鱼.md': CARD, 'state/current-role.json': JSON.stringify({ role: '测试鱼', mode: 'active' }) },
   });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(321, 1, '在吗'), h.cfg);
     const prompt = await h.buildWakePromptV2('group:456', { reason: 'mention' });
     const file = path.join(h.temp, 'state/role-card-v2.md');
@@ -83,7 +82,6 @@ await test('bridge：systemPromptCard.enabled=false 回到旧做法（文件写�
     files: { 'roles/测试鱼.md': CARD, 'state/current-role.json': JSON.stringify({ role: '测试鱼', mode: 'active' }) },
   });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(321, 1, '在吗'), h.cfg);
     const prompt = await h.buildWakePromptV2('group:456', { reason: 'mention' });
     assert.equal(fs.readFileSync(path.join(h.temp, 'state/role-card-v2.md'), 'utf8'), '');
@@ -98,7 +96,6 @@ await test('bridge：发给 extras 的心情/生活/自洽请求带上人格卡�
     files: { 'roles/测试鱼.md': card, 'state/current-role.json': JSON.stringify({ role: '测试鱼', mode: 'active' }) },
   });
   try {
-    h.setMode('reserved2');
     assert.ok(h.currentRoleHintV2().includes('> 语气是'), '二代人格卡留着引用行');
     assert.equal(h.personaBriefV2(), '爱睡觉、慢吞吞的小孩');
     const body = h.withSelfV2('/life/plan', { date: '2026-10-24' });
@@ -115,7 +112,6 @@ await test('主人标记：不写管理员和 QQ 号', async () => {
   const label = async (config) => {
     const h = await bridgeHarness({ config: { ownerQQ: '123', allow: { groups: ['456'] }, ...config } });
     try {
-      h.setMode('reserved2');
       await h.handleIncoming('group', '456', msg(123, 1, '说话'), h.cfg);
       const st = h.getSocialV2State('group:456');
       return [...(st.unread || []), ...(st.recentMessages || [])].filter((m) => m.isOwner).at(-1)?.ownerLabel ?? '';

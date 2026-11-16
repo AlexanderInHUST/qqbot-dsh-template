@@ -45,7 +45,7 @@ function segmentText(seg) {
     case 'image': return '[图片]';
     case 'record': return '[语音]';
     case 'video': return '[视频]';
-    case 'file': return `[文件${d.name ?? ''}]`;
+    case 'file': return d.name ? `[文件:${d.name}]` : '[文件]';
     case 'reply': return '[引用]';
     case 'forward': return '[转发]';
     case 'json': return '[卡片消息]';

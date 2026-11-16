@@ -20,7 +20,6 @@ async function fixture(nightSleep, run, extra = {}) {
     wake: { preSleepWaitEnabled: false, batchWindowMs: 300 }, proactive: { enabled: false, sessionMinutes: [60, 60] }, sticker: { enabled: false },
     wait: { minMs: 100 }, nightSleep, ...extra,
   } } });
-  h.setMode('reserved2');
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
   const post = (path, key, body) => new Promise((resolve, reject) => {
@@ -101,7 +100,6 @@ test('看过的 B 站视频带 BV 号，聊天那边要链接时手里有', () =
 test('自由时间记下的条目用网页标题，不带网址的查询串', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { sessionMinutes: [60, 60] } } } });
   try {
-    h.setMode('reserved2');
     await h.sendWakePromptV2('play:main', 'proactiveCheck');
     const B = 'mcp__sandbox-browser__';
     h.noteFreeTimeViewV2('play:main', `${B}browser_navigate`, '- Page URL: https://www.guokr.com/article/1/\n- Page Title: 黄鼠狼偷童鞋 - 果壳\n');

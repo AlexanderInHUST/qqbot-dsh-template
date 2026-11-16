@@ -9,7 +9,6 @@ async function fixture(run) {
   const h = await bridgeHarness({ config: { ownerQQ: '42', socialV2: {
     wake: { preSleepWaitEnabled: false }, proactive: { enabled: false }, sticker: { enabled: false },
   } } });
-  h.setMode('reserved2');
   const key = 'group:456';
   const st = h.getSocialV2State(key);
   const server = h.startConsoleServer();

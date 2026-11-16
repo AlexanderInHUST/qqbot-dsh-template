@@ -1,46 +1,6 @@
 [
   {
     "method": "POST",
-    "path": "/api/mode",
-    "body": {
-      "mode": "chat",
-      "closedAgentPreset": ""
-    }
-  },
-  {
-    "method": "POST",
-    "path": "/api/mode",
-    "body": {
-      "mode": "reserved",
-      "closedAgentPreset": ""
-    }
-  },
-  {
-    "method": "POST",
-    "path": "/api/mode",
-    "body": {
-      "mode": "reserved2",
-      "closedAgentPreset": ""
-    }
-  },
-  {
-    "method": "POST",
-    "path": "/api/mode",
-    "body": {
-      "mode": "closed-agent",
-      "closedAgentPreset": ""
-    }
-  },
-  {
-    "method": "POST",
-    "path": "/api/mode",
-    "body": {
-      "mode": "closed-agent",
-      "closedAgentPreset": "qq-chat-v2"
-    }
-  },
-  {
-    "method": "POST",
     "path": "/api/roles/create",
     "body": {
       "name": "契约测试角色",
@@ -145,7 +105,8 @@
         "collectSticker": true,
         "getSelfImage": true,
         "stickerNote": true,
-        "setStickerRemark": true
+        "setStickerRemark": true,
+        "sendVoice": true
       },
       "wake": {
         "defaultMode": "diving",
@@ -208,7 +169,7 @@
         "syncTtlMs": 60000,
         "maxListCount": 100,
         "includeInPrompt": true,
-        "promptMaxStickers": 8,
+        "promptMaxStickers": 30,
         "collect": {
           "enabled": true,
           "maxPerMinute": 2,
@@ -264,7 +225,8 @@
         "collectSticker": true,
         "getSelfImage": true,
         "stickerNote": true,
-        "setStickerRemark": true
+        "setStickerRemark": true,
+        "sendVoice": true
       },
       "wake": {
         "defaultMode": "diving",
@@ -327,7 +289,7 @@
         "syncTtlMs": 60000,
         "maxListCount": 100,
         "includeInPrompt": true,
-        "promptMaxStickers": 8,
+        "promptMaxStickers": 30,
         "collect": {
           "enabled": true,
           "maxPerMinute": 2,
@@ -359,55 +321,6 @@
     "body": {
       "paused": false
     }
-  },
-  {
-    "method": "POST",
-    "path": "/api/social",
-    "body": {
-      "triggerProbability": 0.35,
-      "activeCheckMinMs": 12000,
-      "activeCheckMaxMs": 30000,
-      "activeReplyDelayMinMs": 1000,
-      "activeReplyDelayMaxMs": 3000,
-      "activeDurationEnabled": true,
-      "activeDurationMinMs": 180000,
-      "activeDurationMaxMs": 600000,
-      "idleWindowMs": 300000,
-      "idleRetryProbability": 0.4,
-      "idleRetryWaitMs": 120000,
-      "skipProbability": 0.15,
-      "surrenderProbability": 0.08,
-      "contextWindow": 20,
-      "maxReplyChars": 500,
-      "burstEnabled": true,
-      "burstIntervalMinMs": 1000,
-      "burstIntervalMaxMs": 3000,
-      "longGapProbability": 0.1,
-      "longGapMinMs": 2500,
-      "longGapMaxMs": 5000,
-      "mustReplyKeywords": [
-        "鲸鱼",
-        "测试"
-      ],
-      "proactiveEnabled": true,
-      "proactiveIdleThresholdMs": 1800000,
-      "proactiveCheckMinMs": 300000,
-      "proactiveCheckMaxMs": 900000,
-      "proactiveProbability": 0.2
-    }
-  },
-  {
-    "method": "POST",
-    "path": "/api/social/state",
-    "body": {
-      "key": "group:123456789",
-      "phase": "idle"
-    }
-  },
-  {
-    "method": "POST",
-    "path": "/api/social/flush",
-    "body": {}
   },
   {
     "method": "POST",

@@ -181,6 +181,11 @@ def run_once() -> dict:
     import selfprofile
     if selfprofile.enabled():  # she grows up a little (most nights nothing changes)
         done["self profile"] = evolve_profile()
+    import workspace
+    try:  # 最后清文件：上面淡掉、折掉的文件记忆，它们的文件这时候一起删
+        done["files"] = workspace.cleanup()
+    except Exception as exc:  # noqa: BLE001 - files just wait for tomorrow night
+        done["files"] = f"failed: {exc}"
     return done
 
 

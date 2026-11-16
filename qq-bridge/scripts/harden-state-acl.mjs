@@ -18,7 +18,7 @@
 // 合并成一份，从结构上杜绝再次漂移。
 //
 // 用法：node scripts/harden-state-acl.mjs [--quiet]
-//   --quiet 时只在真正做了事情/失败时输出（start.bat 用这个模式）。
+//   --quiet 时只在真正做了事情/失败时输出。
 
 import fs from 'node:fs';
 import path from 'node:path';

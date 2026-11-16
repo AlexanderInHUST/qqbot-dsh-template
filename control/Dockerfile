@@ -37,8 +37,9 @@ RUN cd /opt/qq-bridge \
 
 COPY control/entrypoint-dsh.sh control/entrypoint-bridge.sh control/entrypoint-ui-forward.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/entrypoint-*.sh \
- && mkdir -p /data/dsh /opt/qq-bridge/state \
- && chown -R node:node /data /opt/qq-bridge
+ && mkdir -p /data/dsh /opt/qq-bridge/state /opt/qq-bridge/files \
+ && chown -R node:node /data /opt/qq-bridge \
+ && chmod 2770 /opt/qq-bridge/files
 
 ENV DSH_HOME=/data/dsh \
     NODE_ENV=production

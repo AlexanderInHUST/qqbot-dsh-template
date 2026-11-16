@@ -19,7 +19,6 @@ async function test(name, run) {
     proactive: { enabled: false },
     sticker: { enabled: false },
   } } });
-  h.setMode('reserved2');
   const st = h.getSocialV2State(KEY);
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
@@ -161,7 +160,7 @@ await test('wait exposes new messages and grants only their actually observed cu
   assert.deepEqual(seqs(st.unread), []);
 });
 
-await test('another conversation token, pause, mode and allowlist guards still reject combined close', async ({ h, st, request, append }) => {
+await test('another conversation token, pause and allowlist guards still reject combined close', async ({ h, st, request, append }) => {
   append('protected conversation');
   await request('unread');
   const otherToken = h.getSocialV2State('private:123').agentToken;
@@ -170,9 +169,6 @@ await test('another conversation token, pause, mode and allowlist guards still r
   h.socialV2.paused = true;
   assert.equal((await request('wake-config', { body })).status, 403);
   h.socialV2.paused = false;
-  h.setMode('chat');
-  assert.equal((await request('wake-config', { body })).status, 403);
-  h.setMode('reserved2');
   h.cfg.allow.groups = [];
   assert.equal((await request('wake-config', { body })).status, 403);
   assert.deepEqual(seqs(st.unread), [1]);
@@ -262,11 +258,11 @@ await test('an in-flight wait cannot write observation into a replaced conversat
   assert.equal((await request('mark-read', { body: { throughSeq: 1 }, token: replacement.agentToken })).status, 400);
 });
 
-await test('an in-flight wait rechecks mode permission before exposing a new arrival', async ({ h, request, append }) => {
-  append('before mode change');
+await test('an in-flight wait rechecks the allowlist before exposing a new arrival', async ({ h, request, append }) => {
+  append('before allowlist change');
   await request('unread'); // 先让她看过，等待只从看过的水位往后算
   const waiting = request('wait', { body: { timeoutMs: 1000, quietMs: 0 } });
-  const timer = setTimeout(() => { h.setMode('chat'); append('after mode change'); }, 60);
+  const timer = setTimeout(() => { h.cfg.allow.groups = []; append('after allowlist change'); }, 60);
   let result;
   try { result = await waiting; } finally { clearTimeout(timer); }
   assert.equal(result.status, 403);
@@ -454,11 +450,11 @@ await test('offline wake replay builds a fresh snapshot with the current session
   assert.equal((await request('mark-read', { body: { throughSeq: 2 }, token: st.agentToken })).status, 200);
 });
 
-await test('offline reserved2 wake replay cannot leak into an ordinary chat session', async ({ h, append }) => {
+await test('offline wake replay is dropped once the chat leaves the allowlist', async ({ h, append }) => {
   append('reserved2 queue message');
   h.setReady(false);
   await h.sendWakePromptV2(KEY, 'question');
-  h.setMode('chat');
+  h.cfg.allow.groups = [];
   h.setReady(true);
   await h.flushQueue();
   assert.equal(h.calls.prompts.length, 0);

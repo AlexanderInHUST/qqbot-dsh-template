@@ -7,7 +7,6 @@ async function fixture(idleCompact, run) {
   const h = await bridgeHarness({ config: { ownerQQ: '42', allow: { private: ['42'], groups: ['456', '789'] }, socialV2: {
     wake: { preSleepWaitEnabled: false }, proactive: { enabled: false }, sticker: { enabled: false }, idleCompact,
   } } });
-  h.setMode('reserved2');
   const runs = [];
   h.api.callUnary = async (method, params, signal, policy) => {
     runs.push({ method, params, signal, policy });

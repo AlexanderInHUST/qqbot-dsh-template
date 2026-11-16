@@ -52,7 +52,6 @@ async function fixture(run, { socialV2 = {}, create = null, poll = null, env = {
       ...socialV2,
       video: { url: VIDEO_URL, minIntervalMs: 0, pollMs: 20, ...(socialV2.video ?? {}) },
     } } });
-  h.setMode('reserved2');
   for (const k of [PRIV, HOME, BIG, PLAY]) {
     h.getSocialV2State(k).bootstrapSent = true;
     h.state.sessions = { ...(h.state.sessions ?? {}), [k]: `sid-${k}` };

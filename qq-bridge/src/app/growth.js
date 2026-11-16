@@ -80,7 +80,7 @@ export function createGrowth(app) {
       .map((x) => String(x?.text ?? '').trim().replace(/[。！!；;，,\s]+$/u, ''))
       .filter(Boolean)
       .slice(0, 3);
-    return list.length ? `- 你最近发现自己有点变了：${list.join('；')}。这是你自己心里的感觉，聊到了自然说，不用专门去跟人讲。` : '';
+    return list.length ? `- 你最近发现自己有点变了：${list.join('；')}。这是你自己心里的感觉，聊到了自然说，用你自己的话说、别照这句原话，不用专门去跟人讲。` : '';
   }
   function growthV2() {
     return growthCfgV2().enabled && card ? card : null;

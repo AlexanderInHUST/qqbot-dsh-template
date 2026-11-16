@@ -9,15 +9,6 @@ async function test(name, run) {
   catch (error) { failures++; console.error('FAIL', name, error.message); }
   finally { await h.close(); }
 }
-await test('closed-agent session is not reused after switching to chat', async (h) => {
-  h.setMode('closed-agent');
-  const privileged = await h.ensureSession('private:123');
-  h.setMode('chat');
-  const restricted = await h.ensureSession('private:123');
-  assert.notEqual(restricted, privileged);
-  assert.equal(h.calls.created.at(-1).agentPreset, 'qq-chat');
-  assert.ok(h.calls.cancelled.includes(privileged));
-});
 await test('unavailable preset catalogue fails closed for QQ and learner sessions', async (h) => {
   h.setPresets([]);
   assert.equal(h.resolvePresetName('missing', { strict: true }), '');
@@ -25,8 +16,7 @@ await test('unavailable preset catalogue fails closed for QQ and learner session
   await assert.rejects(h.ensureSlangLearnerSession());
   assert.equal(h.calls.created.length, 0);
 });
-await test('session creation crossing a mode change never accepts stale permissions', async (h) => {
-  h.setMode('closed-agent');
+await test('session creation crossing a reset never accepts the stale session', async (h) => {
   let release;
   const original = h.api.sessions.create;
   h.api.sessions.create = async (params) => {
@@ -36,13 +26,13 @@ await test('session creation crossing a mode change never accepts stale permissi
   };
   const pending = h.ensureSession('private:123');
   while (!release) await new Promise((resolve) => setImmediate(resolve));
-  h.setMode('chat');
+  h.resetEpoch();
   release();
   await assert.rejects(pending);
   assert.equal(h.state.sessions['private:123'], undefined);
 });
 await test('queued send rechecks allowlist at actual transport time', async (h) => {
-  const sending = h.sendToQQ('group:456', 'fixture');
+  const sending = h.sendToQQ('group:456', 'fixture', 'her');
   h.cfg.allow.groups = [];
   await sending;
   assert.equal(h.calls.sent.length, 0);

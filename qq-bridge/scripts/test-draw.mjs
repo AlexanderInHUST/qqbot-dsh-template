@@ -60,7 +60,6 @@ async function fixture(run, { socialV2 = {}, image = null, env = { AIOHUB_API_KE
       ...socialV2,
       draw: { url: DRAW_URL, minIntervalMs: 0, ...(socialV2.draw ?? {}) },
     } } });
-  h.setMode('reserved2');
   for (const k of [PRIV, HOME, BIG, PLAY]) {
     h.getSocialV2State(k).bootstrapSent = true;
     h.state.sessions = { ...(h.state.sessions ?? {}), [k]: `sid-${k}` };

@@ -32,7 +32,6 @@ async function fixture(run, { gate = {}, send = {}, wake = {}, wait = {} } = {})
     proactive: { enabled: false }, sticker: { enabled: false },
     replyGate: { enabled: true, quietMs: 300, groupWaitMaxMs: 5000, talkValue: { group: 1, home: 1 }, ...gate },
   } } });
-  h.setMode('reserved2');
   h.setSelfIdentity('鱼妹', '999');
   const group = (id) => {
     const st = h.getSocialV2State(`group:${id}`);
@@ -131,7 +130,6 @@ await test('DynamicReplyGate：强制唤醒占掉额度后主动的就收紧；�
 await test('不用配置：群都过门控、私聊不过；唤醒提示里没有沉睡前等待', async () => {
   const h = await bridgeHarness({ config: { ...BASE, socialV2: { wake: { batchWindowMs: 1000 } } } });
   try {
-    h.setMode('reserved2');
     assert.equal(h.replyGateOnV2('group:456'), true);
     assert.equal(h.replyGateOnV2('group:789'), true);
     assert.equal(h.replyGateOnV2('private:123'), false);

@@ -16,12 +16,10 @@ const filters = args.filter((a) => !a.startsWith('--'));
 
 // 要连着正在跑的 bridge / DSH / QQ，或者读真的 config.json
 const LIVE = new Set([
-  'test-console', 'test-console-ui', 'test-dsh-auth', 'test-dsh-session-retire', 'test-dsh-v2-wait',
+  'test-console-ui', 'test-dsh-auth', 'test-dsh-session-retire', 'test-dsh-v2-wait',
   'test-forward', 'test-mcp-exec', 'test-onebot-connection', 'test-stickers', 'test-v2-wait',
   'test-vision-media', 'test-setup-dsh-idempotent',
 ]);
-// 上游的 Windows 启动器（start.bat、chcp），这里用不上
-const WINDOWS = new Set(['test-console-encoding', 'test-audit-setup-guards']);
 // 要装好的 DSH（/usr/local/lib/node_modules/@deepseek-ai/dsh），--dsh 时才跑
 const NEEDS_DSH = new Set(['test-preset-local-tools']);
 // 把别的测试串起来跑的老入口，和这里重复
@@ -34,8 +32,7 @@ const all = fs.readdirSync(path.join(root, 'scripts'))
 const skipped = [];
 const picked = all.filter((name) => {
   if (filters.length && !filters.some((f) => name.includes(f))) return false;
-  const why = LIVE.has(name) ? 'live' : WINDOWS.has(name) ? 'windows'
-    : AGGREGATE.has(name) ? 'aggregate' : (NEEDS_DSH.has(name) && !inDsh) ? 'needs-dsh' : '';
+  const why = LIVE.has(name) ? 'live' : AGGREGATE.has(name) ? 'aggregate' : (NEEDS_DSH.has(name) && !inDsh) ? 'needs-dsh' : '';
   if (why && !filters.length) { skipped.push(`${name}(${why})`); return false; }
   return true;
 });

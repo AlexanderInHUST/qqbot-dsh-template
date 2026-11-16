@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
 import { compactModelMessage, isStickerMedia, stickerSummaryText } from '../src/qq-model-view.js';
-import { buildStickerContext, buildStickerStrategyHint, findSticker } from '../src/sticker-lib.js';
+import { buildStickerContext, buildStickerStrategyHint, findSticker, markStickerUsed, normalizeStickerEntry } from '../src/sticker-lib.js';
 
 let failures = 0;
 async function test(name, run) {
@@ -29,7 +29,6 @@ async function fixture(run, extra = {}) {
     files: { 'state/stickers.json': STICKERS },
     globals: { safeFetchBuffer: async () => ({ buffer: GIF, mimeType: 'image/gif' }) },
   });
-  h.setMode('reserved2');
   let server = null;
   const getImages = async (messageId, key = KEY) => {
     if (!server) {
@@ -136,7 +135,6 @@ await test('同一个人紧接着说的话也带上（别人插话就停）；�
   });
   const h = await bridgeHarness({ config: { ownerQQ: '42', allow: { private: ['42'], groups: ['456'] }, socialV2: { wake: { preSleepWaitEnabled: false }, proactive: { enabled: false } } } });
   try {
-    h.setMode('reserved2');
     const PK = 'private:42';
     h.recordSentMessagesV2(PK, ['嘿嘿，我练了好久才画圆的']);
     h.appendSocialV2Message(PK, '私聊', '[表情包]', '[表情包]', false, false, 'p-1', [{ kind: 'image', file: 'y.gif', url: 'https://public.invalid/y.gif', subType: '1' }], '42');
@@ -183,6 +181,40 @@ await test('【可用表情包】先写用法；按“备注 —— 用法”整
   assert.equal(findSticker(STICKERS, '黄狗得意笑（用过3次）')?.id, 'st-1');
   assert.equal(findSticker(STICKERS, '没有这张 —— 随便'), null);
   assert.match(buildStickerStrategyHint(), /别人发表情包：那是 ta 在用图说话/);
+});
+
+// 2026-11-16 主人：“始终就喜欢发几张表情包？” 以前只列用得最多的 8 张，越用越靠前
+await test('【可用表情包】全列、不写用了几次；这两天老发的挪到最后标“换一张”；收藏少时鼓励收', () => {
+  const now = Date.UTC(2026, 10, 16, 6);
+  const H = 3600000;
+  const list = [
+    { id: 'hot', desc: '黄狗得意笑', useCount: 40, lastUsedAt: now - H, recentUses: [now - 30 * H, now - 5 * H, now - H] },
+    { id: 'old', desc: '猫猫躺平', useCount: 9, lastUsedAt: now - 200 * H, recentUses: [] },
+    { id: 'never', desc: '熊猫无语', useCount: 0 },
+    { id: 'once', desc: '小狗晚安', useCount: 3, lastUsedAt: now - 2 * H, recentUses: [now - 2 * H] },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `x${i}`, desc: `备注${i}` })),
+  ];
+  const ctx = buildStickerContext(list, 30, { now });
+  assert.doesNotMatch(ctx, /用过/);
+  const order = ctx.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2).split(/[ （]/)[0]);
+  assert.equal(order.length, 14);
+  assert.equal(order[0], '熊猫无语');
+  assert.equal(order.at(-1), '黄狗得意笑');
+  assert.ok(order.indexOf('猫猫躺平') < order.indexOf('小狗晚安'));
+  assert.match(ctx, /- 黄狗得意笑（这两天发了3回了，换一张别的）/);
+  assert.doesNotMatch(ctx, /小狗晚安（/);
+  assert.match(ctx, /收藏还不多[^\n]*qq_collect_sticker/);
+  // 只列 5 个时老发的那张先不列
+  assert.doesNotMatch(buildStickerContext(list, 5, { now }), /黄狗得意笑/);
+  assert.doesNotMatch(buildStickerContext(Array.from({ length: 45 }, (_, i) => ({ id: `y${i}`, desc: `b${i}` })), 30, { now }), /收藏还不多/);
+});
+
+await test('发一次记一次时间，只留两周、30 次', () => {
+  const r = markStickerUsed([{ id: 'a', desc: '笑死', recentUses: [Date.now() - 20 * 86400000, Date.now() - 86400000] }], 'a');
+  assert.equal(r.entry.recentUses.length, 2);
+  assert.ok(Date.now() - r.entry.recentUses[1] < 5000);
+  const many = normalizeStickerEntry({ id: 'b', recentUses: Array.from({ length: 50 }, (_, i) => Date.now() - i * 1000) });
+  assert.equal(many.recentUses.length, 30);
 });
 
 await test('收藏时带 usage：记到本地库，下次别人发同一张就认得', () => fixture(async ({ h }) => {

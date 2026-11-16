@@ -1,5 +1,5 @@
 #!/bin/sh
-# 在旧机器上打迁移包：停掉整套服务，把七个卷、.env、config/、roles/ 打成一个 tar。
+# 在旧机器上打迁移包：停掉整套服务，把八个卷、.env、config/、roles/ 打成一个 tar。
 # 用法：scripts/migrate-export.sh       → 生成 qqbot-migrate-<时间>.tar（权限 600）
 # 迁移包里有模型 API Key、OneBot token、QQ 和 B 站的登录态，只用 U 盘 / scp 之类的私下渠道拷贝。
 # 导出后不要在旧机器上再 docker compose up：同一个 QQ 号在两台机器同时在线，容易触发风控或被踢下线。

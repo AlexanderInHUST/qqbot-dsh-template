@@ -11,7 +11,7 @@
 | `.env` | 模型中转站 Key、SnowLuma noVNC 密码 | 密钥 |
 | `config/qq-bridge/config.json` | OneBot accessToken、白名单、主人 QQ 等 | 含 token；控制台会写回这个文件 |
 | `config/`、`roles/` 的当前版本 | 导出那一刻的配置和人格卡 | 以防提交后又改过 |
-| 7 个 docker 卷 | 见下表 | 运行期数据 |
+| 8 个 docker 卷 | 见下表 | 运行期数据 |
 
 | 卷 | 内容 |
 |---|---|
@@ -20,6 +20,7 @@
 | `bridge-state` | qq-bridge 状态：会话映射、唤醒配置、黑话、表情包、控制台令牌 |
 | `extras-state` | 长期记忆、搬图记录 |
 | `sandbox-browser` | 沙箱 Chromium 的用户目录（B 站登录） |
+| `yumei-files` | 她每个聊天的文件夹（别人发的、她自己写的文件） |
 
 迁移包里的东西足够冒充这个 QQ 号和 B 站账号，只用 U 盘、`scp` 这类私下渠道拷贝，用完删掉。
 
@@ -65,7 +66,7 @@ scripts/migrate-import.sh /path/to/qqbot-migrate-<时间>.tar
 `migrate-import.sh` 会：
 
 1. 恢复 `.env`（权限 600）、`config/`、`roles/`（`config.json` 权限 640）。
-2. 用迁移包恢复 7 个卷，保留文件的数字属主（沙箱 10001、extras 10002、控制面 1000）。
+2. 用迁移包恢复 8 个卷，保留文件的数字属主（沙箱 10001、extras 10002、控制面 1000）。
 3. 跑 `scripts/preflight.sh --fix`，检查 Docker、目录位置、uid、换行符、密钥和端口。
 
 `preflight.sh` 有“失败”项就先按提示处理，全部通过再继续。

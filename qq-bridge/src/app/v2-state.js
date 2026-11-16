@@ -174,8 +174,8 @@ export function createV2State(app) {
     const owner = cfg.ownerQQ;
     if (!owner) return '';
     const ownerKey = `private:${owner}`;
-    if (app.isSessionAllowedInCurrentMode(ownerKey) && !noReachOut(cfg, ownerKey)) return ownerKey;
-    const home = homeGroupKeys(cfg).find((k) => app.isSessionAllowedInCurrentMode(k));
+    if (app.isSessionAllowed(ownerKey) && !noReachOut(cfg, ownerKey)) return ownerKey;
+    const home = homeGroupKeys(cfg).find((k) => app.isSessionAllowed(k));
     return home || ownerKey;
   }
   async function notifyOwnerOnly(key, text) {
@@ -348,6 +348,7 @@ export function createV2State(app) {
             stickerCollectTimes: Array.isArray(val.stickerCollectTimes) ? val.stickerCollectTimes : [],
             pendingWakeTimer: null,
             lastIncomingAt: Number(val.lastIncomingAt) || 0,
+            playSeenSelfAt: Number(val.playSeenSelfAt) || 0,
             lastUnreadSeq: Number(val.lastUnreadSeq) || 0,
             lastReadThroughSeq: Number.isSafeInteger(val.lastReadThroughSeq) && val.lastReadThroughSeq >= 0
               ? Math.min(val.lastReadThroughSeq, Number(val.lastUnreadSeq) || 0) : 0,
@@ -443,6 +444,7 @@ export function createV2State(app) {
           sendTimes: st.sendTimes.slice(-500),
           stickerCollectTimes: Array.isArray(st.stickerCollectTimes) ? st.stickerCollectTimes.slice(-500) : [],
           lastIncomingAt: st.lastIncomingAt || 0,
+          playSeenSelfAt: st.playSeenSelfAt || 0, // 自由时间的她看到这里的哪儿了（phrasing.js 的先看一眼）
           lastUnreadSeq: st.lastUnreadSeq || 0,
           lastReadThroughSeq: st.lastReadThroughSeq || 0,
           activeTopics: Array.isArray(st.activeTopics) ? st.activeTopics.slice(-50) : [],

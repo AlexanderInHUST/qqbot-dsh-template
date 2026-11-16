@@ -84,7 +84,7 @@ export function createWatchdog(app) {
 
   async function checkTurnsV2() {
     const c = watchdogCfgV2();
-    if (!c.enabled || app.currentMode !== 'reserved2') return;
+    if (!c.enabled) return;
     const now = Date.now();
     for (const [sessionId, t] of turns) {
       // 会话已经换掉（重置、退役）就不管了

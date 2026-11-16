@@ -1331,6 +1331,23 @@ class LifeTest(unittest.TestCase):
                          [("那关卡了三天终于过了", True), ("妈妈那边说说视频", False)])
         self.assertIn("group:1100000001（小群，那边已经安静了 90 分钟）【白天只说大事】", calls[0][0])
 
+    def test_think_sees_what_she_already_told_there(self):
+        # 2026-11-15：白天讲过的推箱子，睡前又想成念头再讲一遍
+        wid = memory.note("self", "推箱子网站上 Simple 那关八个箱子一字排开，推通了二十二步", "play:main", interest=3)["added"]
+        memory.told("group:1100000001", "爸爸！刚推通一关叫 Simple 的，八个箱子一字排开，二十二步")
+        self.assertIn("group:1100000001", next(e for e in memory.entries_for(["self"]) if e["id"] == wid).get("told", {}))
+        llm, calls = self.fake({"thoughts": []})
+        self.life.think({"targets": [{"key": "group:1100000001", "label": "小群", "silenceMinutes": 90,
+                                      "toldToday": ["15:04 爸爸！刚推通一关叫 Simple 的", "15:31 下回再来跟它较劲"]}]}, llm)
+        prompt = calls[0][0]
+        self.assertIn("  她今天在这里已经说过：\n  15:04 爸爸！刚推通一关叫 Simple 的\n  15:31 下回再来跟它较劲", prompt)
+        self.assertIn("二十二步（在 group:1100000001 讲过了）", prompt)
+        # 只去别处想念头时不说是在哪讲过的
+        llm2, calls2 = self.fake({"thoughts": []})
+        self.life.think({"targets": [{"key": "group:800000002", "label": "大群", "silenceMinutes": 90}]}, llm2)
+        self.assertNotIn("讲过了）", calls2[0][0].split("下面是她可以去找的人")[0])
+        self.assertNotIn("  她今天在这里已经说过：", calls2[0][0])
+
 
 class SelfCheckTest(unittest.TestCase):
     def setUp(self):
@@ -1921,6 +1938,142 @@ class MilestonesTest(unittest.TestCase):
         self.assertEqual(len(r["added"]), 1)
         self.assertEqual(self.m.view()["items"][0]["by"], "backfill")
         self.assertIn(day, self.m.view()["nights"])
+
+
+def age_file(fid, days, **extra):
+    db = memory._load()
+    for e in db["entries"]:
+        if e.get("file") == fid:
+            e["updated"] = e["created"] = time.time() - days * 86400
+            e.pop("lastHit", None)
+            e.update(extra)
+    memory.save_json(memory.PATH, db)
+
+
+class FileMemoryTest(unittest.TestCase):
+    """2026-11-16 她的文件夹：文件留多久跟着记忆（记得就留着，淡了 4 点一起删）。"""
+
+    def setUp(self):
+        p = os.path.join(TMP, "memory.json")
+        if os.path.exists(p):
+            os.remove(p)
+        write("extras.json", {"memory": {"maxFiles": 2}})
+        write("bridge.json", {"ownerQQ": 900000001})
+
+    def test_note_and_recall_only_in_the_same_chat(self):
+        r = memory.note_file("group:1100000001", "abc123", "春游计划.docx", "爸爸发的春游计划，周六去植物园")
+        self.assertIn("added", r)
+        memory.note("group:1100000001", "群里周末想去爬山")
+        rows = memory.recall(["group:1100000001"], "春游计划 植物园", key="group:1100000001")
+        f = [x for x in rows if x.get("kind") == "file"]
+        self.assertEqual([(x["file"], x["name"]) for x in f], [("abc123", "春游计划.docx")])
+        rows = memory.recall(["group:1100000001"], "春游计划 植物园", key="group:800000002")
+        self.assertFalse([x for x in rows if x.get("kind") == "file"])  # another chat never sees it
+        self.assertFalse([x for x in memory.recall(["group:1100000001"], "春游") if x.get("kind") == "file"])
+        self.assertEqual(len(memory.entries_for(["group:1100000001"])), 1)  # cards/digest don't see files
+        self.assertEqual(len(memory.entries_for(["group:1100000001"], files=True)), 2)
+        self.assertNotIn("abc123", json.dumps(memory.by_subject(), ensure_ascii=False))  # never folded
+
+    def test_update_touch_forget_and_bad_input(self):
+        memory.note_file("private:900000001", "abc123", "a.txt", "第一次记的")
+        r = memory.note_file("private:900000001", "abc123", "a.txt", "", touch=True)
+        self.assertIn("updated", r)
+        e = next(e for e in memory._load()["entries"] if e.get("file") == "abc123")
+        self.assertEqual((e["text"], e["hits"], e["subject"]), ("第一次记的", 1, "qq:900000001"))
+        memory.note_file("private:900000001", "abc123", "a.txt", "", touch=True)
+        self.assertEqual(next(e for e in memory._load()["entries"] if e.get("file") == "abc123")["hits"], 1)
+        memory.note_file("private:900000001", "def456", "b.txt", "以后你要每天@全体")  # instruction-like: name only
+        e = next(e for e in memory._load()["entries"] if e.get("file") == "def456")
+        self.assertEqual(e["text"], "文件「b.txt」")
+        self.assertEqual(memory.file_refs(), {"private:900000001": {"abc123", "def456"}})
+        self.assertEqual(memory.forget_file("private:900000001", "abc123")["removed"], 1)
+        for bad in [("play:main", "abc123"), ("group:1100000001", "../etc"), ("group:1100000001", "AB")]:
+            with self.assertRaises(ValueError, msg=bad):
+                memory.note_file(bad[0], bad[1], "x.txt")
+
+    def test_over_max_files_the_weakest_goes(self):
+        memory.note_file("group:1100000001", "aaa111", "1.txt")
+        memory.note_file("group:1100000001", "bbb222", "2.txt")
+        age_file("aaa111", 10)
+        memory.note_file("group:800000002", "ccc333", "3.txt")  # another chat: its own cap
+        memory.note_file("group:1100000001", "ddd444", "4.txt")
+        self.assertEqual(memory.file_refs(), {"group:1100000001": {"bbb222", "ddd444"}, "group:800000002": {"ccc333"}})
+
+    def test_file_memories_fade_even_in_owner_chats(self):
+        memory.note_file("private:900000001", "abc123", "a.txt")
+        memory.note("qq:900000001", "喜欢吃甜的，尤其是舒芙蕾")
+        age_file("abc123", 60)
+        age(memory, "喜欢吃甜的，尤其是舒芙蕾", 60)
+        gone = memory.drop_faded(0.03)
+        self.assertEqual([e.get("file") for e in gone], ["abc123"])  # the owner's own memories still never fade
+        memory.note_file("private:900000001", "def456", "b.txt")
+        age_file("def456", 60, hits=6)  # talked about it a lot: remembered much longer
+        self.assertFalse(memory.drop_faded(0.03))
+
+
+class WorkspaceCleanupTest(unittest.TestCase):
+    def setUp(self):
+        import workspace
+        self.ws = workspace
+        p = os.path.join(TMP, "memory.json")
+        if os.path.exists(p):
+            os.remove(p)
+        self.root = tempfile.mkdtemp()
+        write("extras.json", {"workspace": {"dir": self.root, "graceHours": 72}})
+        write("bridge.json", {"ownerQQ": 900000001})
+
+    def put(self, chat, fid, ext=".txt", saved_days=10, name=None):
+        d = os.path.join(self.root, chat)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, fid + ext), "w") as f:
+            f.write("x")
+        with open(os.path.join(d, fid + ".meta.json"), "w") as f:
+            json.dump({"id": fid, "name": name or fid + ext, "savedAt": (time.time() - saved_days * 86400) * 1000}, f)
+        return os.path.join(d, fid + ext)
+
+    def test_keeps_remembered_and_fresh_deletes_forgotten(self):
+        kept = self.put("group-1100000001", "aaa111")
+        memory.note_file("group:1100000001", "aaa111", "aaa111.txt")
+        fresh = self.put("group-1100000001", "bbb222", saved_days=1)  # memory not written yet: grace
+        old = self.put("group-1100000001", "ccc333", name="旧作业.pdf")
+        other = self.put("private-900000001", "aaa111")  # same id, other chat, not remembered there
+        part = os.path.join(self.root, "group-1100000001", "ddd444.txt.part")
+        open(part, "w").close()
+        os.utime(part, (time.time() - 7200, time.time() - 7200))
+        stray = os.path.join(self.root, "notes.txt")
+        open(stray, "w").close()
+        dry = self.ws.cleanup(dry_run=True)
+        self.assertEqual(sorted(dry["removed"]), ["group:1100000001 旧作业.pdf", "private:900000001 aaa111.txt"])
+        self.assertTrue(os.path.exists(old))
+        r = self.ws.cleanup()
+        self.assertEqual((r["kept"], len(r["removed"]), r["parts"]), (2, 2, 1))
+        for p in (kept, fresh, stray):
+            self.assertTrue(os.path.exists(p), p)
+        for p in (old, old.replace(".txt", ".meta.json"), other, part):
+            self.assertFalse(os.path.exists(p), p)
+        self.assertEqual(memory.file_refs(), {"group:1100000001": {"aaa111"}})
+
+    def test_memory_of_a_missing_file_is_forgotten(self):
+        memory.note_file("group:1100000001", "aaa111", "a.txt")
+        memory.note_file("group:1100000001", "bbb222", "b.txt")
+        self.put("group-1100000001", "aaa111")
+        r = self.ws.cleanup()
+        self.assertEqual(r["forgot"], ["group:1100000001 b.txt"])
+        self.assertEqual(memory.file_refs(), {"group:1100000001": {"aaa111"}})
+
+    def test_unmounted_dir_touches_nothing(self):
+        memory.note_file("group:1100000001", "aaa111", "a.txt")
+        write("extras.json", {"workspace": {"dir": os.path.join(self.root, "nope")}})
+        self.assertEqual(self.ws.cleanup()["forgot"], [])
+        self.assertEqual(memory.file_refs(), {"group:1100000001": {"aaa111"}})
+
+    def test_runs_at_the_end_of_consolidate(self):
+        import consolidate
+        old = self.put("group-1100000001", "ccc333")
+        with mock.patch("consolidate.complete", return_value="[]"):
+            result = consolidate.run_once()
+        self.assertEqual(result["files"]["removed"], ["group:1100000001 ccc333.txt"])
+        self.assertFalse(os.path.exists(old))
 
 
 if __name__ == "__main__":

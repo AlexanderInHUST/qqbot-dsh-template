@@ -165,6 +165,39 @@ async def memory_told_http(request):
         return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
 
 
+@mcp.custom_route("/memory/file", methods=["POST"])
+async def memory_file_http(request):
+    """给 qq-bridge 用（src/app/files.js）：她存了、写了、看了、发了 key 里的文件 fid，记住它（文件留多久跟着这条记忆）。
+    body {"key", "fid", "name", "text"?, "touch"?}；text 空就不改原来记的，touch=true 算又想起来了一回。"""
+    from starlette.responses import JSONResponse
+    try:
+        body = await request.json()
+        return JSONResponse(memory.note_file(str(body.get("key") or ""), str(body.get("fid") or ""),
+                                             str(body.get("name") or ""), str(body.get("text") or ""),
+                                             touch=bool(body.get("touch"))))
+    except Exception as error:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+
+
+@mcp.custom_route("/memory/file/forget", methods=["POST"])
+async def memory_file_forget_http(request):
+    """给 qq-bridge 用：她删了 key 里的文件 fid，这条记忆也去掉。body {"key", "fid"}。"""
+    from starlette.responses import JSONResponse
+    try:
+        body = await request.json()
+        return JSONResponse(memory.forget_file(str(body.get("key") or ""), str(body.get("fid") or "")))
+    except Exception as error:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
+
+
+@mcp.custom_route("/files/cleanup", methods=["GET"])
+async def files_cleanup_http(request):
+    """运维用：看今晚 4 点会删哪些文件（?dry=0 才真删）。"""
+    from starlette.responses import JSONResponse
+    import workspace
+    dry = request.query_params.get("dry", "1") != "0"
+    return JSONResponse({"ok": True, "dry": dry, **workspace.cleanup(dry_run=dry)})
+
 
 @mcp.custom_route("/people", methods=["GET"])
 async def people_http(request):

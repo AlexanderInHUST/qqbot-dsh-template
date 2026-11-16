@@ -6,7 +6,7 @@ import { defang } from '../qq-model-view.js';
 
 export function createSelfNow(app) {
   const {
-    PLAY_KEY, cfg, isSessionAllowedInCurrentMode
+    PLAY_KEY, cfg, isSessionAllowed
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, PLAY_LAST_ITEM_MS, convLabelV2, crossSessionCountOnlyV2,
@@ -49,7 +49,7 @@ export function createSelfNow(app) {
     const busy = [];
     const recent = [];
     for (const [k, s] of socialV2.conversations) {
-      if (k === key || k === PLAY_KEY || !isSessionAllowedInCurrentMode(k)) continue;
+      if (k === key || k === PLAY_KEY || !isSessionAllowed(k)) continue;
       const label = convLabelV2(k, s, neutral);
       if (isConversationBusyV2(k, s)) busy.push(label);
       else if (Number(s.lastAiReplyAt) && now - Number(s.lastAiReplyAt) < 10 * 60000) recent.push(`${minutesAgoTextV2(s.lastAiReplyAt, now)}在${label}说过话`);

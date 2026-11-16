@@ -17,7 +17,6 @@ const msg = (userId, id, t) => ({
 await test('唤醒取长期记忆时带上群号、说话的人和最近聊天内容', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 500 } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(77777, 1, '你们看台风新闻了吗，香港那边挂八号风球'), h.cfg);
     for (let i = 0; i < 60 && !h.calls.prompts.length; i += 1) await sleep(50);
     assert.equal(h.calls.prompts.length, 1);
@@ -32,7 +31,6 @@ await test('唤醒取长期记忆时带上群号、说话的人和最近聊天�
 await test('每来一条消息通知 extras 记一笔（只带会话和发言人，不带内容）', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 500 } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(77777, 1, '第一句'), h.cfg);
     await h.handleIncoming('group', '456', msg(88888, 2, '第二句'), h.cfg);
     await sleep(20);
@@ -44,7 +42,6 @@ await test('每来一条消息通知 extras 记一笔（只带会话和发言人
 await test('关掉 digestNotify 就不通知', async () => {
   const h = await bridgeHarness({ config: { socialV2: { longTermMemory: { digestNotify: false } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(77777, 1, '第一句'), h.cfg);
     await sleep(20);
     assert.equal(h.calls.http.filter((c) => c.url.endsWith('/digest/notify')).length, 0);
@@ -121,7 +118,6 @@ await test('人物卡关着（默认）：不发 people、不渲染卡，memberI
 await test('人物卡开着：【对群友的印象】不显示，qq_memory_append memberImpression 被引到 person_note', async () => {
   const h = await bridgeHarness({ config: { socialV2: { longTermMemory: { personCards: true } } } });
   try {
-    h.setMode('reserved2');
     const key = 'group:456';
     const st = h.getSocialV2State(key);
     h.appendMemoryV2(st, 'memberImpression', '爱发猫图', { target: '阿杰' });
@@ -200,7 +196,6 @@ await test('控制台看、删成长记录转给 extras；带 agent token 的拒
   };
   const h = await bridgeHarness({ globals: { fetch } });
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('group:456');
     const server = h.startConsoleServer();
     if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));

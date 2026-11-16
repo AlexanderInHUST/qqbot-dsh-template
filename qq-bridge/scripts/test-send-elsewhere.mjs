@@ -24,7 +24,6 @@ async function fixture(run, { socialV2 = {}, fetch = null } = {}) {
       send: { burstIntervalMinMs: 10, burstIntervalMaxMs: 10, maxGapMs: 10, longGapProbability: 0, maxSendPerHour: 0, maxSendPerMinute: 0 },
       ...socialV2,
     } } });
-  h.setMode('reserved2');
   for (const k of [PRIV, MOM, HOME, BIG, PLAY]) {
     h.getSocialV2State(k).bootstrapSent = true;
     h.state.sessions = { ...(h.state.sessions ?? {}), [k]: `sid-${k}` };
@@ -189,7 +188,7 @@ await test('noReachOut：爸爸私聊她照回，但她不主动去找——不�
     assert.equal(asked.length, 0, '不主动找');
     // 他私聊来找她：照常叫醒
     say(PRIV, '42', '在吗', true);
-    assert.ok(h.isSessionAllowedInCurrentMode(PRIV));
+    assert.ok(h.isSessionAllowed(PRIV));
   }, { fetch, socialV2: { noReachOut: [PRIV], initiate: { enabled: true, targets: [PRIV], from: '00:00', to: '00:00', minSilenceMinutes: 0 },
     life: { enabled: true }, playShare: { enabled: true } } });
 });

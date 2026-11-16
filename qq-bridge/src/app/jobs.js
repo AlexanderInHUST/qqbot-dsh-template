@@ -11,7 +11,7 @@ import { localDay } from '../proactive-schedule.js';
 const JOB_NOTES_MAX = 60;
 
 export function createJobs(app) {
-  const { PLAY_KEY, api, appendActivity, isSessionAllowedInCurrentMode, log, shouldBlockSilentReply } = app;
+  const { PLAY_KEY, api, appendActivity, isSessionAllowed, log, shouldBlockSilentReply } = app;
   let afterSentV2, castTextV2, convLabelV2, extrasPostV2, getSocialV2State, notePlayLogV2, ownVideoOfV2, recordOwnImageV2,
     saveSocialV2State, sendSegmentsV2, sendWakePromptV2, socialV2, turnRunningV2;
 
@@ -153,7 +153,7 @@ export function createJobs(app) {
       if (cast.names?.length) entry.cast = cast.names;
       const product = await spec.produce(entry, cast.text || '');
       entry.model = product.model;
-      if (socialV2.paused || !isSessionAllowedInCurrentMode(key) || shouldBlockSilentReply(key)) throw new Error(spec.blockedError);
+      if (socialV2.paused || !isSessionAllowed(key) || shouldBlockSilentReply(key)) throw new Error(spec.blockedError);
       let sent = null;
       for (const [i, part] of product.parts.entries()) {
         try {

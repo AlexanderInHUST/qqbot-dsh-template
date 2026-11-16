@@ -4,7 +4,7 @@ import { inNightSleep, localDay, minutesUntilClock, nextClockTime, nightPlan, sh
 
 export function createNightSleep(app) {
   const {
-    PLAY_KEY, api, cfg, isSessionAllowedInCurrentMode, log, markReadCalledKeys
+    PLAY_KEY, api, cfg, isSessionAllowed, log, markReadCalledKeys
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, acknowledgeMessagesV2, convLabelV2, crossSessionSummaryOnlyV2,
@@ -209,9 +209,9 @@ export function createNightSleep(app) {
   }
   // 往正在进行的其他会话里插一句让她收尾去睡。why：'self' 她自己在 fromKey 说了去睡；'night' 到了睡觉时间
   async function steerSleepV2(fromKey, why) {
-    if (app.currentMode !== 'reserved2' || socialV2.paused) return;
+    if (socialV2.paused) return;
     for (const [k, st] of [...socialV2.conversations]) {
-      if (k === fromKey || !isSessionAllowedInCurrentMode(k) || !isConversationBusyV2(k, st)) continue;
+      if (k === fromKey || !isSessionAllowed(k) || !isConversationBusyV2(k, st)) continue;
       if (why === 'night' && ownerAwakeV2(k)) continue; // 正陪着主人的不催
       const sessionId = app.state.sessions?.[k];
       if (!sessionId) continue;
@@ -243,7 +243,7 @@ export function createNightSleep(app) {
     const night = isNightSleepV2();
     const was = lastNightStateV2;
     lastNightStateV2 = night;
-    if (was !== false || !night || app.currentMode !== 'reserved2' || socialV2.paused) return;
+    if (was !== false || !night || socialV2.paused) return;
     if (socialV2.sleptAt && Date.now() - socialV2.sleptAt < 2 * 60000) return; // 她自己刚说去睡，goToSleepV2 已经插过话
     const awakeMs = nightSleepCfgV2().ownerAwakeMs;
     const now = Date.now();
@@ -295,7 +295,7 @@ export function createNightSleep(app) {
 
     // 起床后补一次夜里被挡掉的唤醒
     app.scheduler.every('night-missed-wakes', 60 * 1000, () => {
-      if (!nightMissedWakes.size || isNightSleepV2() || socialV2.paused || app.currentMode !== 'reserved2') return;
+      if (!nightMissedWakes.size || isNightSleepV2() || socialV2.paused) return;
       for (const [key, reason] of [...nightMissedWakes]) {
         nightMissedWakes.delete(key);
         const st = getSocialV2State(key);

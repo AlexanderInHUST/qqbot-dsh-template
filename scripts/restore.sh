@@ -1,13 +1,13 @@
 #!/bin/sh
 # 从备份目录恢复 docker 卷（会覆盖卷里的现有数据）。配置和人格卡需要你自己解压 config-and-roles.tar.gz。
 # 用法：docker compose down && scripts/restore.sh <备份目录> [-y]
-#   全量（scripts/backup.sh）：恢复七个卷。
-#   每周自动的那份（KIND 写着 weekly）：也是七个卷，但不带会话里的图（dsh-home/attachments），
+#   全量（scripts/backup.sh）：恢复八个卷。
+#   每周自动的那份（KIND 写着 weekly）：也是八个卷，但不带会话里的图（dsh-home/attachments），
 #     图从 ATTACHMENTS=<目录>（默认 backups/auto/附件，backup-auto.sh 每天增量拷的）补回去，已经有的不动。
 #     本机那份也没了就先拉网盘上的：rclone copy remote:鱼妹备份/附件 /tmp/附件，再 ATTACHMENTS=/tmp/附件。
 #     网盘上有几张叫 <sha256>.dup（原名被传坏的半截文件占着），拷回去时自动改回原名。
 #   每天的（scripts/backup-auto.sh daily，目录里有 KIND 文件写着 daily）：只恢复她自己的数据
-#     bridge-state、extras-state、dsh-home，dsh-home 里的 attachments/、cache/ 不动（每天的不带会话里的图）。
+#     bridge-state、extras-state、dsh-home、yumei-files，dsh-home 里的 attachments/、cache/ 不动（每天的不带会话里的图）。
 #     换机器或卷全没了：先恢复最近的每周全量，再恢复它之后最近的每天那份。
 # 备份目录可以是相对仓库的 backups/…，也可以是绝对路径。网盘上的先拉下来：rclone copy remote:鱼妹备份/每天/<时间> /tmp/<时间>
 set -eu
@@ -21,11 +21,19 @@ KIND="full"
 test -f "$SRC/KIND" && KIND="$(cat "$SRC/KIND")"
 ATTACHMENTS="${ATTACHMENTS:-backups/auto/附件}"
 if [ "$KIND" = "daily" ]; then
-  VOLUMES="bridge-state extras-state dsh-home"
+  VOLUMES="bridge-state extras-state dsh-home yumei-files"
 else
   # SnowLuma 的三个卷里有 QQ 登录态，恢复后不用重新扫码
-  VOLUMES="dsh-home bridge-state qq-gateway-data qq-client-config qq-client-data sandbox-browser extras-state"
+  VOLUMES="dsh-home bridge-state qq-gateway-data qq-client-config qq-client-data sandbox-browser extras-state yumei-files"
 fi
+# yumei-files（她的文件夹）2026-11-16 才有，更早的备份里没有：那就不动它
+OPTIONAL="yumei-files"
+have=""
+for vol in $VOLUMES; do
+  case " $OPTIONAL " in *" $vol "*) test -f "$SRC/${vol}.tar.gz" || { echo "这份备份里没有 $vol，不恢复它" >&2; continue; } ;; esac
+  have="$have $vol"
+done
+VOLUMES="${have# }"
 
 for vol in $VOLUMES; do
   test -f "$SRC/${vol}.tar.gz" || { echo "缺少 $SRC/${vol}.tar.gz" >&2; exit 1; }

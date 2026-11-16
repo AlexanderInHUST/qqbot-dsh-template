@@ -26,6 +26,7 @@ import * as stateBlocksLib from '../src/state-blocks.js';
 import * as privacyLib from '../src/privacy-policy.js';
 import * as replyGateLib from '../src/reply-gate.js';
 import * as innerLifeLib from '../src/inner-life.js';
+import * as repeatPhrasesLib from '../src/repeat-phrases.js';
 import { sheetNote } from '../src/gif-frames.js';
 import { unwrap, createTurnCollector } from '../src/dsh-client.js';
 import { createScheduler as realCreateScheduler } from '../src/scheduler.js';
@@ -138,26 +139,24 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     // 拆到 src/app/*.js 里的都在 app 上；下面是还留在 bridge.js 里的
     ...app,
     ensureSession, resolvePresetName, deliverPrompt, drainPromptQueue, sendToQQ, handleIncoming, cfg, state,
-    api, promptQueues, refreshMode, modeAllowed, trackTurnEvent, collectors, pendingWakeKeys,
+    api, promptQueues, allowed, trackTurnEvent, collectors, pendingWakeKeys,
     extractMediaFromSegments, segmentsToText, bot, v2TurnStartAt, turnLeaseNoted, TURN_BUSY_LEASE_MS,
-    settingFromDshNamespace, handlePokeNotice, pokeWakeOkV2, sessionContextTokens, log,
-    getMode() { return currentMode; },
+    handlePokeNotice, pokeWakeOkV2, sessionContextTokens, log,
     setSelfIdentity(display, id) {
       selfDisplayName = String(display ?? '');
       selfUserId = String(id ?? '');
       selfNickname = selfDisplayName.toLowerCase() || 'deepseek';
     },
     flushQueue, retireSession, assertOutboundAuditOk,
-    setMode(value) { currentMode = value; },
     setReady(value) { dshReady = value; },
-    setPresets(value) { dshPresetIds = value; dshDefaultPreset = 'standard'; },
+    setPresets(value) { dshPresetIds = value; },
     resetEpoch() { sessionEpoch++; },
   };
   bot.onPrivateMessage(async (event) => {`);
   const timers = new Set();
   let schedulerRef = null;
   const context = vm.createContext({
-    fs, os, path, http, crypto, fileURLToPath, URL, Buffer, AbortSignal, console: process.env.HARNESS_LOG ? console : { log() {}, error() {} },
+    fs, os, path, http, crypto, fileURLToPath, URL, Buffer, AbortSignal, TextDecoder, console: process.env.HARNESS_LOG ? console : { log() {}, error() {} },
     fetch: fakeFetch,
     // 锁文件探测用（bridge.js 顶层的 consolePortInUse）；
     // 固定桩掉：测试不应该真去 netstat 宿主机。
@@ -187,6 +186,8 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ...replyGateLib,
     // qqbot_agent：心情、生活、主动找人的纯函数
     ...innerLifeLib,
+    // 她老用的说法（src/repeat-phrases.js）
+    ...repeatPhrasesLib,
     // qqbot_agent：动图拼宫格要 spawn ffmpeg，测试里当静态图处理
     animatedSheet: async () => null, toJpeg: async () => null, sheetNote,
     // ACL 收紧会 spawn icacls 去改**真实**文件系统；测试不该做这件事（同理见下面的

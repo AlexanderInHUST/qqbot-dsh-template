@@ -6,17 +6,13 @@
 // 127.0.0.1:3000 HTTP 接口可被任何本机进程用 Bearer token 直接调用。因此
 // **"仿真会话拿不到 shell"是整个分层安全模型唯一的真边界**。
 //
-// 但在此之前没有任何断言检查过这件事：
-//   · `test-audit-setup-guards.mjs` 把工具名**喂**给 guard，验证它拒绝——这证明
-//     guard 逻辑对，**不证明本地工具已从工具清单里隐藏**；
-//   · `probe-tools.mjs` 只断言"模型某一轮没有调用本地工具"——**没调用 ≠ 不在清单里**。
-//
-// 本测试补上注册期那一半：从**真实 preset 文件**里解析出 preset 组成，断言
+// 守卫逻辑对不对、模型有没有调，都不能证明本地工具已从工具清单里隐藏。
+// 本测试补注册期那一半：从**真实 preset 文件**里解析出 preset 组成，断言
 // 工具守卫被挂载，并且守卫的 restrict 名单覆盖每一个已知本地执行工具。
 // 它不依赖运行中的 DSH，因此可以进 `npm run test:audit`，每次回归都跑。
 //
-// 口径说明：这里断言的是"preset 声明会隐藏/拒绝这些名字"。真正的端到端断言
-// （注册出来的清单里确实没有）需要活的 DSH，属 `probe-tools.mjs` 的范畴。
+// 口径说明：这里断言的是"preset 声明会隐藏/拒绝这些名字"。注册出来的清单里确实没有，
+// 部署后拿会话记录里 request/header 的 tools 对一遍（见 CLAUDE.md 升级 DSH 一节）。
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -293,7 +289,8 @@ test('hideTools 里的工具 MCP 连上后从清单里藏起来，执行时也�
   }
   // 聊天那边藏换成原生工具的那几个的 MCP 版（2026-11-08 起 qq-native-tools.mjs，src/qq-capabilities.js）；返回图片的留在 MCP
   const { nativeToolNamesFor } = await import(pathToFileURL(path.join(ROOT, 'src', 'qq-capabilities.js')).href);
-  for (const n of nativeToolNamesFor('chat').map((x) => `mcp__snowluma__${x}`)) assert.ok(listed.includes(n), `qq-chat-v2 藏起 ${n}`);
+  // 只有原生版的（qq_file_*，2026-11-16）MCP 里本来就没有，不用藏
+  for (const n of nativeToolNamesFor('chat').filter((x) => new RegExp(`^\\s+'${x}',\\s*$`, 'm').test(src)).map((x) => `mcp__snowluma__${x}`)) assert.ok(listed.includes(n), `qq-chat-v2 藏起 ${n}`);
   for (const n of ['mcp__snowluma__qq_get_message_images', 'mcp__snowluma__qq_get_forward_msg', 'mcp__snowluma__qq_get_sticker_image', 'mcp__snowluma__qq_get_self_image']) {
     assert.ok(!listed.includes(n), `返回图片的 ${n} 聊天那边留在 MCP`);
   }

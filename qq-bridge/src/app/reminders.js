@@ -7,7 +7,7 @@ import { SENSITIVE_RE } from '../sensitive.js';
 
 export function createReminders(app) {
   const {
-    PLAY_KEY, api, cfg, isOwnerId, isSessionAllowedInCurrentMode, log, playEnabledV2, v2TurnStartAt
+    PLAY_KEY, api, cfg, isOwnerId, isSessionAllowed, log, playEnabledV2, v2TurnStartAt
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let REMINDERS_MAX, crossSessionCountOnlyV2, getSocialV2State, whenV2, isConversationBusyV2,
@@ -68,7 +68,7 @@ export function createReminders(app) {
       .map((w) => String(w).trim().slice(0, 12)).filter(Boolean).slice(0, 8);
     let where = String(inRaw ?? '').trim();
     if (!where) where = key.startsWith('private:') ? key : 'any';
-    if (where !== 'any' && (!/^(private|group):\d+$/.test(where) || !isSessionAllowedInCurrentMode(where))) return { ok: false, error: 'waitIn 要填白名单里的会话 key，或者 "any"' };
+    if (where !== 'any' && (!/^(private|group):\d+$/.test(where) || !isSessionAllowed(where))) return { ok: false, error: 'waitIn 要填白名单里的会话 key，或者 "any"' };
     return { ok: true, wait: { who, userId, words, in: where } };
   }
   function reminderWaitMatchV2(r, key, msg) {
@@ -322,7 +322,7 @@ export function createReminders(app) {
   }
   let reminderTicking = false;
   async function reminderTickV2(now = Date.now()) {
-    if (reminderTicking || app.currentMode !== 'reserved2' || socialV2.paused || cfg.socialV2?.enabled === false) return;
+    if (reminderTicking || socialV2.paused || cfg.socialV2?.enabled === false) return;
     if (!Array.isArray(socialV2.reminders) || !socialV2.reminders.length) return;
     reminderTicking = true;
     try {
@@ -331,7 +331,7 @@ export function createReminders(app) {
       for (const r of [...socialV2.reminders]) {
         if (r.due > now) continue;
         const key = r.key;
-        if (now - r.due > REMINDER_STALE_MS || !isSessionAllowedInCurrentMode(key)) {
+        if (now - r.due > REMINDER_STALE_MS || !isSessionAllowed(key)) {
           socialV2.reminders = socialV2.reminders.filter((x) => x !== r);
           changed = true;
           log(`[提醒] ${key} 的“${r.note}”过了太久没叫到，算了`);

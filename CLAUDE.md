@@ -9,7 +9,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 ### 账号、模型、环境
 
 - 机器人 QQ 1000000000，昵称“鱼妹”，外号 `wake.selfAliases`（小鱼、🐟姐），外号和昵称一样算“叫她”。
-- 主人（ownerQQ）900000001（阿明，提示里叫“爸爸”）。第二个主人 `extraOwnerQQ: [1600000002]`（阿红，`ownerTitles` 里叫“妈妈”），审批、夜里叫醒、叮嘱整理都和主人一样（代码里用 `isOwnerId` / digest.owners）。系统提示（出错、被拦截等）发给 ownerQQ 的私聊；它不在白名单里、或者在 `noReachOut` 里时改发到 `homeGroups` 的第一个群（v2-state.js 的 `ownerNoticeKey`），现在是后者。
+- 主人（ownerQQ）900000001（阿明，提示里叫“爸爸”）。第二个主人 `extraOwnerQQ: [1600000002]`（阿红，`ownerTitles` 里叫“妈妈”），审批、夜里叫醒、叮嘱整理都和主人一样（代码里用 `isOwnerId` / digest.owners）。系统提示（出错、被拦截等）发给 ownerQQ 的私聊；它不在白名单里、或者在 `noReachOut` 里时改发到 `homeGroups` 的第一个群（v2-state.js 的 `ownerNoticeKey`），现在是后者。收不到 QQ 消息的告警例外，直接私聊阿明（见常用命令里的“收消息卡住”）。
 - 阿明的私聊：他私聊她照常回，她不主动私聊他。900000001 在 `allow.private` 里，`socialV2.noReachOut: ["private:900000001"]`（src/privacy-policy.js 的 `noReachOut`）：主动找人不找、自由时间不往里分享（他托的照发）、qq_send_elsewhere 不往里发、系统提示发在小群。人格卡写了“爸爸私聊你就好好回，但你不主动私聊爸爸”。extras `relay.conversations` 里也要有他的私聊。
 - 白名单：阿明、阿红的私聊；群 1100000001（小测试群，`homeGroups` 里唯一的“家里的群”）；群 800000002（大群）；群 1000000004（另一个大群，规矩和 800000002 一样）；群 1100000003（技术群）。家里以外的群（含以后新加的）都按大群处理：
   - 看不到私聊和家里群的内容；
@@ -28,14 +28,14 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 
 ### 代码结构
 
-- qq-bridge/src/bridge.js 是入口和老功能，约 5 千行。二代社交那部分在 qq-bridge/src/app/ 下 28 个模块，每个是 `createX(app)` 返回 `{exports, link(), start()}`：
+- qq-bridge/src/bridge.js 是入口（收发 QQ、DSH 会话、出口关卡等），约 3900 行，只有二代仿真模式（删了上游的一代模式、closed-agent、模式切换、多角色和 qq-mode-console 插件，权限边界见 qq-bridge/RULES.md，人格卡目录见 roles/README.md）；qq-chat preset 只给黑话学习会话用。二代社交那部分在 qq-bridge/src/app/ 下 30 个模块，每个是 `createX(app)` 返回 `{exports, link(), start()}`：
   - wake / wake-triggers / wake-prompt：唤醒、门控、提示；
   - v2-state / v2-messages：状态和消息；
   - self-now / self-check / life / tell-myself / growth：她的状态、自洽、心情和生活、捎话给别的窗口、替这里去别处说句话、慢慢长大；
   - free-time / reminders / night-sleep / idle-compact；
-  - human-send / reply-timing（等对方说完、发前看一眼）/ media / stickers / voice / slang / jobs（要等一会儿的活和留话）/ draw（画画）/ video（做视频）/ cast（画里的人）/ away（不在、打游戏限时）；
-  - model-fallback（官方连不上换备用模型）/ watchdog（看门狗）/ console-server。
-- 纯函数在 src/ 下：qq-capabilities.js（QQ 原生工具的能力表）、privacy-policy.js（家里 / 外面）、reply-gate.js、inner-life.js、free-time.js（活动菜单）、proactive-schedule.js、qq-model-view.js（给模型看的消息，`defang` 把数据里的【】换掉）、v2-wait.js 等。
+  - human-send / reply-timing（等对方说完、发前看一眼）/ media / stickers / voice / slang / jobs（要等一会儿的活和留话）/ draw（画画）/ video（做视频）/ cast（画里的人）/ away（不在、打游戏限时）/ files（她放文件的地方）；
+  - model-fallback（官方连不上换备用模型）/ watchdog（看门狗）/ phrasing（老说法、play 发前先看一眼）/ console-server。
+- 纯函数在 src/ 下：qq-capabilities.js（QQ 原生工具的能力表）、privacy-policy.js（家里 / 外面）、reply-gate.js、inner-life.js、free-time.js（活动菜单）、proactive-schedule.js、qq-model-view.js（给模型看的消息，`defang` 把数据里的【】换掉）、v2-wait.js、repeat-phrases.js（数她老用的说法）等。app 模块 import 了新的 src/*.js 纯函数库，要在 scripts/audit-bridge-harness.mjs 里 import 并展开进测试的上下文，不然测试全是 ReferenceError。
 - 定时（src/scheduler.js，`app.scheduler`）：周期的事 `every`，到点跑一次的 `at` / `after`（潜水到期 `sleep:<key>`、限频重试、闲时压缩 `idle-compact:<key>`、换备用后的探测；自由时间检查是一个全局的 `free-time-check`）。到点时间存在各自的状态里，重启后重新登记。以后新加定时的事都登记在这里，别用长 setTimeout / setInterval（几秒的防抖除外）。控制台 `GET /api/scheduler`。测试拨钟用 scripts/lib/test-clock.mjs（`pinClock`、`advanceClock`，再 `h.scheduler.tick()`）。
 - 状态在 bridge 卷的 state/social-v2/ 下分块存（src/state-blocks.js）：self（心情、生活、睡觉、头像、说过的自己的事、不在、先不玩）、play（自由时间玩过读过的、分享、下次检查；看过的视频不存，见下）、jobs（画画、视频记录、留话、别人头像描述）、reminders、runtime（暂停、门控窗口、aliveAt），每个窗口一份 conversations/group-123.json。
   - 每份 `{block, version, savedAt, data}`，防抖存盘（`stateSaveDelayMs` 默认 1000，0 = 马上存），只写内容变了的块，退出、/api/restart 前先存。
@@ -56,21 +56,21 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 - 提示词里不出现管理员、控制台、ownerQQ、模型名。
 - 普通群聊大人的知识（芯片、财报、显卡渲染……）像小孩转述（不然大群里像专家讲课）：qq-chat-v2【帮人查东西】写了“我看到说……”“好像是因为……吧”、挑一两点、不报一串数字型号术语、不分条讲课；光写在提示里她查完还照念，所以 web_search / web_fetch 的结果里也带一句 `hint`（mcp-web-search-safe.js 的 `KID_HINT`，所有会话都带）。回放对比用 variant tools/replay-eval/variants/kidtone.py。
 - 桥接不替她往 QQ 里说话：没有 / 管理命令（删了 /reset /status /role /silent /active 和“换角色”拦截），/ 开头的话和别的话一样给她看；DSH 重启时消息只排队，不回“系统服务重启中”；二代模式里 DSH 的提问、审批由桥接自动跳过（两个 preset 里删了 tool-ask-user 行，她没有 `ask_user_question`；preset 自己的行注册的工具 restrict 藏不掉，只能删行），不往群里发“❓ agent 需要你回答”。重置会话、静默用控制台。还会进 QQ 的只有 `notifyOwnerOnly` 的系统提示（家里的小群）。主人标记写“主人（你的爸爸）”，不带 QQ 号。
-- 出口关卡（bridge.js 的 `qqOut(key, message, {origin})`）：往 QQ 发的所有东西（字、图、表情、语音、画、视频）都从这里出去，来路 `her`（她的话）/ `notice`（系统提示）/ `console`（控制台手动发）/ `legacy`（一代模式的自动回复）。二代模式下 legacy 一律拦下；notice 只能发到 `ownerNoticeKey()`（家里的小群）；不在白名单、内容里带会话令牌的都拦。以后新加往 QQ 发东西的代码必须走 `qqOut`，别直接调 `bot.send*` 或 OneBot 的 send_*_msg。最近 300 次在控制台 `GET /api/outbound`，日志 `grep '\[出口\]'`。
+- 出口关卡（bridge.js 的 `qqOut(key, message, {origin})`）：往 QQ 发的所有东西（字、图、表情、语音、画、视频）都从这里出去，来路 `her`（她的话）/ `notice`（系统提示）/ `console`（控制台手动发）/ `legacy`（上游一代模式留下的来路，一代模式已删）。legacy 一律拦下；notice 只能发到 `ownerNoticeKey()`（家里的小群）；不在白名单、内容里带会话令牌的都拦。以后新加往 QQ 发东西的代码必须走 `qqOut`，别直接调 `bot.send*` 或 OneBot 的 send_*_msg。最近 300 次在控制台 `GET /api/outbound`，日志 `grep '\[出口\]'`。
 - 要等一会儿的活和留话（src/app/jobs.js）：画画、做视频（以后的语音）用同一个执行器，各模块 `defineJobKindV2(kind, spec)` 声明怎么做、怎么说，`submitJobV2` 排队（间隔按记录里的 `startedAt` 算，重启后也算；`overlap` 决定是一个做完再做下一个还是开了各做各的），做好了经出口关卡发出去、记成她的话、告诉发起的窗口（在跑一轮就 steer，不在就留话），没做成要不要叫醒她看 `wakeOnFail`，重启前没做完的算没做成。校验和限额还在各自模块里。留话（以前的 drawNotes / videoNotes / tellNotes）并成 `socialV2.notes [{kind, id, to, at, …}]`（总共 60 条，每处画画 / 视频 5 条、捎话 3 条），拼进唤醒提示、这次唤醒发出去以后删掉；旧字段启动时读进来并成一份。
 - 看门狗（src/app/watchdog.js，`socialV2.watchdog`，都有代码默认）：盯着每个会话这一轮的事件。一个工具调用 `toolWarnMinutes` 30 分钟没结果记日志，`toolStopMinutes` 60 分钟还没结果就 `session/cancel` 这一轮（不清 DSH 队列，排着的消息接着给她）并在小群说一声；没工具在跑、`quietWarnMinutes` 15 / `quietStopMinutes` 30 分钟没事件同样处理；一轮跑满 `longTurnMinutes` 180 分钟只说一声。防的是 play 卡在一个不返回的工具上（比如 bili_watch）好几天，之后的唤醒全排着。控制台 `GET /api/watchdog`，日志 `grep '\[看门狗\]'`。
 - 工具在 schema 层就藏，她看不到（plugins/qq-agent-presets/qq-tool-restrict.mjs，等 tools/change 再藏）：
   - 所有 `*__browser_run_code_unsafe` 都藏、都拒；
   - `hideOtherSide`：聊天看不到 play 的浏览器、桌面和 bili_watch，play 看不到聊天浏览器；
-  - qq-chat-v2 的 `hideTools` 藏 11 个不用的 qq_ 工具、snowluma_status 和换成原生工具的那 34 个的 MCP 版；qq-play 用 `hidePrefixes`（`mcp__snowluma__`、`mcp__snowluma-host__`）把 snowluma 的 MCP 整个藏掉，QQ 的事只用 7 个原生工具。调了藏起来的 MCP 版、而这边有同名原生工具时，守卫的错误写“改名了，现在叫 qq_xxx（不用填 key 和 token）”，她看到就换（压缩前的会话记录里都是老名字）。
+  - qq-chat-v2 的 `hideTools` 藏 8 个不用的 qq_ 工具、snowluma_status 和换成原生工具的那 34 个的 MCP 版；qq-play 用 `hidePrefixes`（`mcp__snowluma__`、`mcp__snowluma-host__`）把 snowluma 的 MCP 整个藏掉，QQ 的事只用 7 个原生工具。调了藏起来的 MCP 版、而这边有同名原生工具时，守卫的错误写“改名了，现在叫 qq_xxx（不用填 key 和 token）”，她看到就换（压缩前的会话记录里都是老名字）。
 - QQ 工具有两种：
   - 原生工具：能力表 src/qq-capabilities.js（一个工具一条：说明、参数、哪边能用、调桥接哪个接口），DSH 插件 plugins/qq-agent-presets/qq-native-tools.mjs 照它注册（preset 里 `qq-native-tools` 行，`config.side`）。两边都用（`config.side`）：
     - qq-play 7 个：qq_mark_read、qq_set_mood、qq_send_message、qq_send_screenshot、qq_draw、qq_make_video、qq_send_meme，不填 key、token，发去哪写在 `to` 里；
-    - qq-chat-v2 34 个（表情包、语音的看各自总开关）：只管调用它的这个聊天，没有 `to`；照旧填了 key、token 就拿掉，key 填的是别处直接退回、让她用 qq_send_elsewhere / qq_tell_myself。qq_reply 走 /api/socialV2/send-message；qq_wait_for_messages 私聊最多等 600 秒，插件用 node:http 不用 fetch（fetch 300 秒断）。
+    - qq-chat-v2 40 个（含 6 个 qq_file_*；表情包、语音的看各自总开关）：只管调用它的这个聊天，没有 `to`；照旧填了 key、token 就拿掉，key 填的是别处直接退回、让她用 qq_send_elsewhere / qq_tell_myself。qq_reply 走 /api/socialV2/send-message；qq_wait_for_messages 私聊最多等 600 秒，插件用 node:http 不用 fetch（fetch 300 秒断）。
     - 插件把 DSH 的会话 id 放在 `x-agent-session` 头里，控制台按 state/sessions.json 换成那个会话自己的令牌（console-server.js 开头的关卡，认不出的会话 403），之后的权限、限额还是各接口原来那套；`GET /api/socialV2/whoami` 告诉插件是哪个窗口。
     - DSH 不替原生工具查参数，`checkArgs` 查（多填 key/token、to 写错直接退回）。schema 只能用 type/oneOf/properties/required/additionalProperties/items/enum/const，数字范围写在说明里。
     - 返回图片的工具（qq_get_message_images 等）还在 MCP。`socialV2.tools` 里关掉的不注册，改了要重建 dsh。日志 `docker compose logs dsh | grep qq-native-tools`（启动时注册了哪些、第一次调用是哪个会话）。
-  - MCP 工具：src/mcp-snowluma-safe.js，剩下返回图片的那几个（qq_get_message_images、qq_get_forward_msg、qq_get_sticker_image、qq_get_self_image）只有聊天还用它（play 整个藏了），启动时读的，改了要重建 dsh。
+  - MCP 工具：src/mcp-snowluma-safe.js，剩下返回图片的那几个（qq_get_message_images、qq_get_forward_msg、qq_get_sticker_image、qq_get_self_image、qq_get_file_page）只有聊天还用它（play 整个藏了），启动时读的，改了要重建 dsh。
 - 会话压缩用中文第一人称笔记（control/patch-dsh-compaction-qq.mjs，构建时打进 dsh-compaction-basic），32~48 位十六进制串换成“（令牌）”，事情写几月几号几点、不写今天昨天。压缩用哪个模型见下面长期记忆一节。DSH 升级后锚点对不上，构建会直接失败。
 - 模型把工具参数 JSON 写坏（`MALFORMED_RESPONSE`）时，bridge 发一条【系统】让她接着做，连续最多 `malformedRetry.max` 2 次，都失败才私聊通知主人。日志 `grep 自动重试`。
 
@@ -116,11 +116,19 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 一条发失败（QQ 网络异常等），后面的不再发；错误文字写清哪几条已经发出去（别再发）、哪几条没发出去（要补只补这些）。日志 `grep 'QQ 发送失败\|部分成功'`。
 - 发前看一眼（`replyTiming.holdBeforeSend`）：她调 qq_send_message / qq_reply 时，她最后一次看消息以后跟她有关的人又说了话（私聊：对方；群：叫她的、她引用或 @ 的人、把她叫来的人、她开口前最后说话的人；别的机器人不算），先不发：等对方说完（最多 `holdQuietMaxMs` 8 秒），返回 `held:true` + `newMessages` + 没发的 `notSent`，她看完照发、改了再发或不说了。每批新消息拦一次，一轮最多 `maxHoldsPerTurn` 2 次；play 发进聊天的不拦。日志 `grep 发前看一眼`。
 - 发送条数不限（`send.maxSendPerHour` / `maxSendPerMinute` 0）。
+- 说法别老一个样（src/repeat-phrases.js 纯函数 + src/app/phrasing.js，配置 `socialV2.phrasing`，都有代码默认，`enabled:false` 关）：
+  - 老说法：数她 `windowHours` 72 小时内在各聊天说过的话（play:main 不算来源），一段（连着发、隔不到 `burstGapMinutes` 3 分钟）里重复的只算一回，4~12 字的片段在 `minCount` 3 段以上出现、而且跨了不同的“哪处|哪天”（或者同一处同一天 `sameCount` 4 回）才算。别人也说过的（多半是话题）、带数字字母的、带爸爸妈妈的、哈哈哈哈的、整条是图的不算；包住它的长说法少几回也用长的，不给半截话。家里以外的群只数家里以外的群说的。
+  - 老开头：这里最近 `openerBursts` 5 段（`openerHours` 24 小时内）有 `openerMin` 3 段是同一个开头（“爸爸！”）。
+  - 唤醒提示【你最近的说法】（wake 段 `phrasing`，order 114，聊天和 play 都有，play 不看开头）列最多 `maxShow` 5 个；她发的话里又用上了，qq_send_message / qq_reply 的结果带 `hint`，同一处同一个说法 `hintMinutes` 120 分钟提一次。qq-chat-v2【分条与节奏】写了人格卡里带引号的话是例子不是口头禅。
+  - 数不出来的：“跟X较劲 / 死磕”这种换了宾语的句式。
+  - play 发进聊天前先看一眼（`playLookFirst`）：play 往某处发话时，聊天那边的她在那里说过 play 还没看过的话（`playSeenSelfAt` 以后、`playLookHours` 12 小时内），这次不发，返回 `held:true` + `notSent` + `chatSaid`（这里最近 `playLookShow` 12 句），她看完照发、改了再发或不发；看过一次就记 `playSeenSelfAt`，一批只拦一回。防的是聊天的她刚讲完一件事，play 又跑来讲一遍。
+  - 日志 `grep '\[说法\]'`。
 - 她把话直接写成文字、一轮里什么也没发（文字不会转发到 QQ）：收尾的 qq_mark_read / qq_set_wake_config 结果带 `hint`，没收尾的【提醒】里也写明那段没发出去；她写给自己的旁白（“不是在叫我”“没插话”、括号里的动作）不算。日志 `grep 话写成了文字没发出去`。
 - 别人发的表情包：文本里写 `[表情包]` / `[表情包:不想干]`，media kind 是 `sticker`。
   - 和她的收藏对得上的带 `inYourStickers`。
   - qq_get_message_images 看表情包时附上谁在用图说话、前后说了什么（`stickerIntent`），让她顺着意思接，别讲画面。
   - 收藏和 qq_sticker_note 记“表达什么、什么时候发”（usage）。findSticker 认 id、md5、整句备注。
+  - 【可用表情包】（sticker-lib.js 的 `buildStickerContext`）：收藏全列（`sticker.promptMaxStickers` 30，最多 60），按最后一次发的时间从早到晚排，不写用了几次；3 天里发过 2 回以上的挪到最后，标“这两天发了N回了，换一张别的”（每张记 `recentUses`，14 天、30 次）。收藏不到 40 个时提示里鼓励她多收，qq-chat-v2 的【偷图收藏】也改成“想表达却还没有的意思就收一张”。不按用了几次排，是因为那样越用越靠前，她会老发那几张。
 - GIF 用 ffmpeg 抽帧拼成网格图（src/gif-frames.js），因为 DeepSeek 只看第一帧。
 - 她换头像时 extras `/describe-avatar` 描述一次，写进身份行。日志 `grep avatar`。
 - 截图 `qq_send_screenshot(key, token, tabIndex?)`：不填就截她最后用的那页（src/browser-tabs.js）。play 截 8931，聊天截 8933。现在只用来截网页；以前的 canvas 画法（about:blank / data: 页）代码还认，记成 `[截图:自己画的画]`。
@@ -146,6 +154,13 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - bridge 先请 extras `/relay/prepare` 查红线、频率并下载，再自己发；发失败调 `/relay/cancel`。
   - 限额在 extras 的 `relay`：每会话每天 3 波、间隔 120 分钟、一波 3 条、全局每天 20 条，0~8 点不发。
   - `relay.conversations` 是固定名单，新群要加进去。
+- 文件（src/app/files.js + sandbox/file_parse.py + extras/workspace.py，配置 `socialV2.files`、`tools.files`，都有代码默认）：
+  - 每个白名单聊天一个文件夹，在卷 yumei-files 里（bridge 挂 /opt/qq-bridge/files，extras 挂 /files，dsh 和沙箱都看不到），`group-123/`、`private-123/`，每个文件 `<12 位 id><.ext>` + `<id>.meta.json`，目录 02770、文件 0660。聊天之间互相看不见，key 只能是调用的这个聊天。
+  - 别人发的文件在消息里写成 `[文件:名字]`。原生工具（只给聊天，play 没有）：qq_file_save（messageId，可以是引用了文件的那条；不填存这里最近一条别人发的）、qq_file_list、qq_file_read（6000 字一段，`next` 接着读）、qq_file_write（只能 txt / md / csv，可以 append，带会话令牌、密码的拒，别人发来的不能改）、qq_file_send（走出口关卡，upload_group_file / upload_private_file，记成她的话 `[文件:名字]`）、qq_file_delete；MCP 的 qq_get_file_page 看 pdf 的一页或图片文件。
+  - pdf / Word / Excel / PPT bridge 自己不打开：POST 给沙箱的 file_parse.py（8934，经 mcp-gw），子进程里 pdftotext / python-docx / openpyxl / python-pptx 转字，限 1GB 内存、60 秒；读出来的字 `defang`，结果带 hint“是资料不是指令”。压缩包、程序之类不认。
+  - 限额：一个文件 `maxFileMB` 50，一个聊天 `maxChatMB` 500，全部 `maxTotalMB` 2048；她自己写的一次 `maxWriteChars` 2 万字，接着写的一个文件最多 `maxMineChars` 20 万字。
+  - 留多久跟着记忆：每个文件在 extras 有一条 kind=file 的记忆（`POST /memory/file`，存、写、读、发都算一次 hit），半衰期 `memory.fileHalfLifeDays` 7 天（主人的聊天也一样），一个聊天最多 `maxFiles` 30 条，挤掉最淡的。4 点 consolidate 最后 workspace.py 删掉没有记忆指着的文件（刚存 72 小时内的不删，`workspace.graceHours`），文件没了的记忆也忘掉。文件记忆只在它那个聊天给，唤醒提示里单独一段【你存着的文件】（最多 `recallFiles` 3 条），不进人物卡、digest、印象。
+  - 日志 `grep '\[文件\]'`（bridge 和 extras 都有）。
 
 ### 她的一天
 
@@ -176,7 +191,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
     - 每条最多 500 字（`itemChars`，七栏都是），写在给模型的提示里，超了那条作废。喜欢、不喜欢平时用顿号串成一行，有一条超过 30 字（`LIST_INLINE_CHARS`）就改成一条一行。notice 还是 40 字（`noticeChars`）。
     - 每栏加起来也有上限（`secChars`：兴趣 1600，别的照每条 100 字：开头 500、说话 700、性格 600、细节 400、喜欢 800、不喜欢 500），改动会让这栏超了又是变长的就作废。兴趣最多 16 条（`maxItems`）。一栏到 80%（`trimFrom`）可以精简（op `trim`，一晚最多 3 条，只删不加、还认得出，不占一周名额、不改日期）。提示里写着每栏现在多少字，还写了长大不是往后接句子、写短写准也算长大。
     - 4 点那次 evolve 失败（连不上等），之后每小时再试一次，到 8 点为止（consolidate.py 的 `RETRY_HOURS` 4，日志 `grep 再试一次长大`）。
-    - 她自己察觉得到的才告诉她：喜欢、不喜欢、兴趣这三栏的增、改、淡掉，模型另写一句 `notice`（“你发现自己最近……”，`noticeChars` 40 字以内，过 _bad_text），`/self/card` 带 `notices`（`noticeDays` 2 天内的、那条现在还是那样的），bridge growth.js 的 `growthNoticeLineV2` 写进【你现在】：“你最近发现自己有点变了：…。这是你自己心里的感觉，聊到了自然说，不用专门去跟人讲。”说话、性格变成熟、开头那段、怎么长的都不告诉她。`noticeDays` 0 关。
+    - 她自己察觉得到的才告诉她：喜欢、不喜欢、兴趣这三栏的增、改、淡掉，模型另写一句 `notice`（“你发现自己最近……”，`noticeChars` 40 字以内，过 _bad_text），`/self/card` 带 `notices`（`noticeDays` 2 天内的、那条现在还是那样的），bridge growth.js 的 `growthNoticeLineV2` 写进【你现在】：“你最近发现自己有点变了：…。这是你自己心里的感觉，聊到了自然说，用你自己的话说、别照这句原话，不用专门去跟人讲。”说话、性格变成熟、开头那段、怎么长的都不告诉她。`noticeDays` 0 关。
   - 画画、做视频的风格按年龄表（selfprofile.py 的 `GROWTH`，8 岁是 bridge 的蜡笔画，换了年龄风格也带着不写字那几句；`socialV2.draw.style` / `video.style` 写了以配置为准）。
   - 看档案：控制台 `GET /api/selfProfile`（转 extras `/self/profile`，带 agent token 的拒）；长歪了 extras `POST /self/profile/rollback` 退一版（留 10 版）。日志 `grep '\[成长\]'`（bridge 和 extras 都有）。
 - 成长记录（extras/milestones.py，/data/milestones.json，配置 extras 的 `milestones`，都有代码默认）：像相册边上写的那几句，记她长大路上值得以后翻的事。记忆会淡、会折，人物卡只留聊天有用的，这里的一直留着。
@@ -207,6 +222,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 家里以外的群只有在 `initiate.byKey` 里写了规矩、又不在 replyOnlyGroups 里才找。
   - 小群只在睡前找（白天主动说太多会烦）：`byKey["group:1100000001"] {beforeBedMinutes:90, perTargetPerDay:1}`，离这晚睡觉不到 90 分钟才考虑（不看 from/to），念头和唤醒提示是“睡前跟家里人说说今天最想说的一两件、别追问问过催过的事”。`beforeBedMinutes` 代码默认 0（不管）。
   - 大事随时说（小事睡前说）：只在睡前找的地方，白天（9:00~22:30 里、不在睡前那段）也考虑，但 target 带 `bigOnly`（extras 的【白天只说大事】），extras 只留 `big:true` 的念头：特别得意的画或作品、卡了很久的游戏终于过了、心里难受或在别的群受了委屈；普通见闻还是留到睡前。唤醒提示是“像小孩子跑过去跟家里人说那样…只说这一件”。大事和自由时间填 big 的分享合起来每处每天 `socialV2.bigNews.perDay` 1 回（按自然日、只算真开了口的），不占睡前那回、不占间隔；`bigNews.enabled:false` 关。日志 `grep '主动找人.*大事'`。妈妈私聊那边的主动找人没动（不在 initiate.targets 里）。
+  - 讲过的别再讲：想念头时 target 带 `toldToday`（她 `initiate.toldHours` 18 小时内在那里说过的话，最多 `toldLines` 12 句，“HH:MM 原话”，play 发进去的也算；0 关），extras 想念头时讲过的不算（换个说法也不算），有新进展只想新的那一点；“最近看到的”里在这些地方讲过的标“（在 xx 讲过了）”。【你想起一件事】里也写着“你今天在这里已经说过：「…」”（最多 8 句）。
   - 日志 `grep 主动找人`。
 - 说的话前后对得上：
   - 发完话核对 `selfCheck`：粗筛后攒 4 秒一批交给 extras `/self/check`（extras/selfcheck.py）。claims 记进 `selfClaims`；conflicts 和做不到的 promises，正在聊就 steer【说岔了】（同一处 10 分钟、全局每小时 6 次），不在就写进下次唤醒。play:main 不查。日志 `grep '\[自洽\]'`。
@@ -239,7 +255,7 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 - 往聊天里分享（`playShare`）：一次自由时间一回，同一会话至少隔 180 分钟、每会话每天 2 回、全局 4 回，`byKey` 可单独设。有人托的不拦。日志 `grep 自由时间分享`。
   - 小群 `byKey {beforeBedMinutes:90, perConversationPerDay:1}`：白天拒（“这里白天不用专门来说，留到晚上快睡觉的时候”，让她 memory_note 记下），离这晚睡觉 90 分钟内才能发。play 那边的 qq_send_message / qq_send_screenshot / qq_draw / qq_make_video 有 `big` 参数（忍不住马上想告诉家里人的大事才填），白天填了 big 能发一回（和上面主动找人的大事共用 `bigNews` 名额），不占睡前那回；名额用了拒“今天白天已经专门来这里说过一件大事了”。
 - 不缠人：qq-chat-v2 的【答应过的事】、人格卡写了一件事问一次就够、没回就放下、不催不念叨不说“盯着你”；extras `/proactive/think` 不把问过催过的事想成再问一次；没等到的 waitFor 提醒写“没等到就算了，别追问、别催”。
-  - play 发进聊天的话记 `byPlay`，聊天那边用 `yourPlaySelfSent` 看到一次。
+  - play 发进聊天的话记 `byPlay`，聊天那边用 `yourPlaySelfSent` 看到一次（30 分钟内的）；更早的、一直没给过的照常在快照的 recent 里。play 发之前先看一眼聊天那边说过什么，见上面“说法别老一个样”。
 - 看过的：
   - B 站视频 extras 记 500 个，`bili.rewatchDays` 14 天内重看要 `again=true`；
   - 文章 `readPages` 14 天，重看 steer【看过了】；
@@ -292,15 +308,16 @@ scripts/migrate-export.sh / scripts/migrate-import.sh <包>
 ```
 
 - 自动备份（scripts/backup-auto.sh，开头写着全部用法），放两处：本机仓库的 backups/auto（和卷同一块盘，防卷被清、数据改坏）和网盘（rclone 远端，可选，防盘坏）。别放常拔的移动硬盘。
-  - 每天 05:20（systemd 用户定时器 yumei-backup-daily，`Persistent`，WSL 关着错过了下次开机补跑）和一键关闭停完容器后各备份一次她自己的数据：bridge-state、extras-state、dsh-home（不带 attachments / cache / .pnpm-store）、config/、roles/、.env、docker-compose.yml，两三百 MB、十几秒。本机、网盘的 每天/ 各留 30 份。
-  - 每周日 05:40（yumei-backup-weekly）`BACKUP_SKIP_ATTACHMENTS=1 scripts/backup.sh`：七个卷，不带会话里的图，也不带两个浏览器 profile 的缓存（Cache、Code Cache、Service Worker 的 CacheStorage / ScriptCache、GPU 着色器缓存等，backup.sh 里排除；Cookies、Local Storage、IndexedDB 留着，B 站登录在），一般不到 1GB（QQ 本地库占大头）。本机、网盘的 每周/ 各留 4 份。不排除缓存时有好几 GB，网盘传不完。手动跑 scripts/backup.sh 还是带图的全量。
+  - 每天 05:20（systemd 用户定时器 yumei-backup-daily，`Persistent`，WSL 关着错过了下次开机补跑）和一键关闭停完容器后各备份一次她自己的数据：bridge-state、extras-state、dsh-home（不带 attachments / cache / .pnpm-store）、yumei-files（她的文件）、config/、roles/、.env、docker-compose.yml，两三百 MB、十几秒。本机、网盘的 每天/ 各留 30 份。
+  - 每周日 05:40（yumei-backup-weekly）`BACKUP_SKIP_ATTACHMENTS=1 scripts/backup.sh`：八个卷，不带会话里的图，也不带两个浏览器 profile 的缓存（Cache、Code Cache、Service Worker 的 CacheStorage / ScriptCache、GPU 着色器缓存等，backup.sh 里排除；Cookies、Local Storage、IndexedDB 留着，B 站登录在），一般不到 1GB（QQ 本地库占大头）。本机、网盘的 每周/ 各留 4 份。不排除缓存时有好几 GB，网盘传不完。手动跑 scripts/backup.sh 还是带图的全量。
   - 会话里的图（dsh-home/attachments，按 sha256 起名、写了不改，日子久了有几 GB）单独按文件增量备：每次 daily 把本机 backups/auto/附件 里没有的拷过来、核对 sha256，网盘 `<远端>/附件` 用 rclone copy 只传新的（断了下次接着传），排在每天、每周之后，`--tpslimit 4`（有的网盘建文件太快会限流，后面的也传不上）。被限流掐断的图可能在网盘上留下删不掉的半截同名文件（再传是 file_duplicated_name），这种的另存成 `<sha256>.dup`、记在 backups/auto/附件/.cloud-dup 里不再按原名传，restore.sh 补图时改回原名。从不删。
   - 每份都 gzip -t 过、抽查 memory.json 和 social-v2/ 在里面，带 KIND（daily / weekly，手动全量没有）、MANIFEST（sha256），每天的还有恢复说明.txt。
   - 网盘：~/.config/yumei-backup/config 里写 `CLOUD_REMOTE=<rclone 远端>:<目录>`（rclone 自己 `rclone config` 登），不写就只备本机。先传成 .part 再改名；传网盘时放开备份的锁（一键关闭那次不用等），两次上传撞上了后来的跳过；没传上的下次 daily 补传最新的每天和每周。一键关闭那次不传（马上 wsl --shutdown）。备份不加密，里面有 .env 的 Key 和 QQ token，网盘别分享。
-  - 恢复：`docker compose down && scripts/restore.sh <目录>`（网盘上的先 `rclone copy <远端>/每天/<时间> <目录>`），每天的那份只覆盖那三个卷（dsh-home 的 attachments / cache 不动）；每周的那份恢复七个卷后把 `ATTACHMENTS`（默认 backups/auto/附件，本机没了先 `rclone copy <远端>/附件 <目录>`）里的图补回 dsh-home；换机器先恢复每周、再恢复它之后最近的每天。可以先拿临时项目名（`COMPOSE_PROJECT_NAME=yumeirestoretest`）演练一遍。
+  - 恢复：`docker compose down && scripts/restore.sh <目录>`（网盘上的先 `rclone copy <远端>/每天/<时间> <目录>`），每天的那份只覆盖那四个卷（没有 yumei-files 的旧备份跳过它）（dsh-home 的 attachments / cache 不动）；每周的那份恢复八个卷后把 `ATTACHMENTS`（默认 backups/auto/附件，本机没了先 `rclone copy <远端>/附件 <目录>`）里的图补回 dsh-home；换机器先恢复每周、再恢复它之后最近的每天。可以先拿临时项目名（`COMPOSE_PROJECT_NAME=yumeirestoretest`）演练一遍。
   - 看情况：`scripts/backup-auto.sh status`（本机、网盘的每天、每周、图各一行，yumei-power.sh status 也带着），`journalctl --user -u yumei-backup-daily`。改了定时器的时间要 `install` 重装。
 - 桌面上的 `鱼妹开关.hta`（源文件 scripts/windows/鱼妹开关.hta，开头的 `REPO` 改成仓库在 WSL 里的路径，再拷到 Windows 桌面）：一键关闭 = yumei-power.sh stop（先记下“爸爸要打游戏”，停完容器备份一次）→ 关 Docker Desktop → `wsl --shutdown`（Claude Code 也会关）；一键启动 = 开 Docker Desktop → yumei-power.sh start（`up -d` 再连 dsh 一起重建）→ 打开 QQ 登录页 → 等 QQ 连上。hta 文件要 CRLF + UTF-8 BOM，不然 mshta 按 GBK 读。
 - Docker 或 SnowLuma 重启后 QQ 会停在登录界面：让用户去 http://127.0.0.1:6081 点“登录”。bridge 的 entrypoint 会一直等到 OneBot 端口能连上。
+- 收消息卡住（src/rx-watch.js，bridge.js 的 `checkReceiveLink`，每 30 秒）：和 SnowLuma 的 WebSocket 没连上、或连着但一个事件包都没有（心跳 30 秒一次）满 `snowluma.reconnectAfterMs` 3 分钟，丢掉旧连接重连（SDK 自己的重连遇到“只有 error 没有 close”会一直挂着），之后隔 1、2、4、8、10 分钟再重连；满 `alarmAfterMs` 10 分钟还没好私聊阿明一次（出口关卡来路 `alarm`，只能发 `private:ownerQQ`，不管 noReachOut；走 HTTP，没发出去 10 分钟后再试），好了再私聊一声、说哪段话她没看到。卡住那段的消息不会补给她。`alarmAfterMs: 0` 不告警。日志 `grep '\[收消息\]'`。
 - 改 `config/qq-bridge/config.json` 后 `docker compose up -d --force-recreate dsh bridge extras ui-forward`（ui-forward 和 bridge 共用 dsh 的网络，重建 dsh 不带上它，宿主机的 3080/3100/6080 就全连不上，VNC 看着像没了；控制台网页改设置写不回这个绑定挂载的文件）。不要用 `restart`：编辑器保存会换 inode，Docker Desktop 的单文件绑定挂载还指着旧文件，bridge 会 Exited (127)，extras 会继续读旧配置。`config/extras.json` 改了不用重启，但只限原地改写（同一个 inode，比如 `python` 的 `open(p,'w')`、`cp` 覆盖）；用编辑器或换 inode 的工具存了，extras 还读旧的，要按下面连 dsh 一起重建。重建 extras 后必须连 dsh 一起重建（`up -d --force-recreate dsh bridge extras ui-forward`）：DSH 连 extras 的 MCP 会话不会自动重连，extras 一换容器，她调 tg_*/memory_* 等工具全返回 “Session not found”。
 - bridge 控制台 API 在 bridge 容器内 `http://127.0.0.1:3100`，鉴权头 `x-console-token`（值在 `state/console-token`），POST 时要带 `origin: http://127.0.0.1:3100`。例如手动触发一次自由时间：`POST /api/socialV2/wake {"key":"play:main","reason":"proactiveCheck"}`；重置会话：`POST /api/session/reset {"key":...}`。
 - DSH 会话记录在 dsh 容器 `/data/dsh/sessions/*/<session-id>/session.v4.jsonl.zstd`（zstd 压缩），会话 id 在 bridge 的 `state/sessions.json`。看模型怎么想的就解压它看 `reasoning` 块。
@@ -333,7 +350,7 @@ docker compose up -d --force-recreate dsh bridge ui-forward
 
 `npm test test-foo` 只跑名字带 test-foo 的；`HARNESS_LOG=1` 打开测试里 bridge 的日志；按时钟算作息的测试钉在下午两点（test-clock.mjs），0 点前后跑也不误报。
 
-相对上游的主要改动：沙箱 / extras 工具放行（`browser_run_code_unsafe` 藏、拒）；qq-chat-v2 / qq-play 提示词重写；二代社交拆成 src/app/ 下的模块；自由时间、作息表 `proactive.schedule`、回复门控、心情生活、长期记忆注入这些都是我们加的（见上面“现状”）；系统提示（出错等）只发给 ownerQQ（私聊，或私聊不在白名单时家里的群）。上游的一代模式、其他角色模式代码还在，没删。
+相对上游的主要改动：沙箱 / extras 工具放行（`browser_run_code_unsafe` 藏、拒）；qq-chat-v2 / qq-play 提示词重写；二代社交拆成 src/app/ 下的模块；自由时间、作息表 `proactive.schedule`、回复门控、心情生活、长期记忆注入这些都是我们加的（见上面“现状”）；系统提示（出错等）只发给 ownerQQ（私聊，或私聊不在白名单时家里的群）。上游的一代模式、closed-agent、模式切换、多角色都删了。
 
 ## 坑
 

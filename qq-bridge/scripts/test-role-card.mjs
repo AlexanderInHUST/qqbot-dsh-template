@@ -92,16 +92,17 @@ test('统计与小节报告可用于控制台预览', () => {
   assert.equal(common.injected, true);
 });
 
-test('真实人格卡可用，且筛选不丢公共内容', () => {
-  const file = new URL('../roles/小鲸鱼.md', import.meta.url);
+// 人格卡在仓库根的 roles/（运行时挂到 /opt/qq-bridge/roles），镜像里没有，那里跳过
+const realCard = [new URL('../../roles/鱼妹.md', import.meta.url), new URL('../roles/鱼妹.md', import.meta.url)].find((u) => fs.existsSync(u));
+test('真实人格卡可用，且筛选不丢公共内容', { skip: !realCard && '找不到 roles/鱼妹.md' }, () => {
+  const file = realCard;
   const raw = fs.readFileSync(file, 'utf8');
   const v2 = selectRoleText(raw, 'v2');
   const v1 = selectRoleText(raw, 'v1');
   assert.ok(v2.length > 0 && v1.length > 0);
   // 人设部分两种模式都必须保留
   for (const text of [v1, v2]) {
-    assert.match(text, /小鲸鱼/);
-    assert.match(text, /AI 味|去 AI 味/);
+    assert.match(text, /鱼妹/);
   }
   // 二代注入的文本里不应再出现一代的分条机制
   assert.doesNotMatch(v2, /空格分隔（例如|\[SILENT\]/);

@@ -31,7 +31,6 @@ async function fixture(run, { rt = {}, gate = {} } = {}) {
     replyGate: { enabled: false, ...gate },
     replyTiming: { ...RT, ...rt },
   } } });
-  h.setMode('reserved2');
   h.setSelfIdentity('鱼妹', '999');
   const conv = (key) => {
     const st = h.getSocialV2State(key);

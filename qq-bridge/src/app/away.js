@@ -16,7 +16,7 @@ import { isHomeChat } from '../privacy-policy.js';
 
 export function createAway(app) {
   const {
-    PLAY_KEY, STATE_DIR, api, cfg, isSessionAllowedInCurrentMode, log, readJsonSafe
+    PLAY_KEY, STATE_DIR, api, cfg, isSessionAllowed, log, readJsonSafe
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, asleepAtV2, convLabelV2, getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2,
@@ -161,7 +161,7 @@ export function createAway(app) {
     const a = socialV2.away;
     if (!backfillPending || backfillRunning || !a) return null;
     const self = String(app.selfUserId || '');
-    if (!self || app.currentMode !== 'reserved2' || typeof app.handleIncomingV2 !== 'function') return null;
+    if (!self || typeof app.handleIncomingV2 !== 'function') return null;
     backfillRunning = true;
     backfillPending = false;
     // QQ 要等主人在登录页点“登录”才连上，这之前她也收不到消息：不在的这一段算到连上为止
@@ -171,7 +171,7 @@ export function createAway(app) {
     const convs = [
       ...(cfg.allow?.private || []).map((id) => ['private', String(id)]),
       ...(cfg.allow?.groups || []).map((id) => ['group', String(id)]),
-    ].filter(([kind, id]) => isSessionAllowedInCurrentMode(`${kind}:${id}`));
+    ].filter(([kind, id]) => isSessionAllowed(`${kind}:${id}`));
     const counts = {};
     try {
       for (const [kind, id] of convs) {

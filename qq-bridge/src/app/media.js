@@ -414,14 +414,6 @@ export function createMedia(app) {
     return out;
   }
 
-  function mediaHintFor(key, messageRef, mediaList) {
-    if (!Array.isArray(mediaList) || mediaList.length === 0 || !messageRef) return '';
-    if (app.currentMode === 'reserved2') {
-      return `\n【图片/表情】本条消息包含 ${mediaList.length} 个图片/表情（消息ID=${messageRef}）。如需要查看/识别，请调用 mcp__snowluma__qq_get_message_images，参数 key="${key}", messageId="${messageRef}"。`;
-    }
-    return `\n【图片/表情】本条消息包含 ${mediaList.length} 个图片/表情（消息ID=${messageRef}）。`;
-  }
-
   // qqbot_agent：别人发的表情包是在用图说话。以前看图结果只写 [图片1]，提示词又让她“描述、吐槽”，
   // 她每次都讲画面（“粉色帽子抱着奶瓶”“青色双马尾”）。看表情包时附上他发之前的几句，问她他想说什么。
   function stickerIntentCfgV2() {
@@ -491,8 +483,8 @@ export function createMedia(app) {
   function findMessageMedia(key, ref) {
     const refStr = String(ref ?? '').trim();
     if (!refStr) return [];
-    // 二代：消息对象上直接带 media（仅在确实存在二代会话状态时读取，避免为 gen1 创建影子状态）
-    if (app.currentMode === 'reserved2' || socialV2.conversations.has(key)) {
+    // 二代：消息对象上直接带 media
+    {
       try {
         const st = getSocialV2State(key);
         if (st) {
@@ -505,7 +497,7 @@ export function createMedia(app) {
         }
       } catch {}
     }
-    // 一代/普通模式：messageMediaStore
+    // 还不在 recentMessages 里的（刚收到、被挤掉的）：messageMediaStore
     const byRef = messageMediaStore.get(key);
     if (byRef) {
       const hit = byRef.get(refStr);
@@ -530,7 +522,6 @@ export function createMedia(app) {
       fetchOneBotImage,
       findMessageMedia,
       getImageDimensions,
-      mediaHintFor,
       mimeFromBuffer,
       mimeFromUrl,
       modelImageV2,

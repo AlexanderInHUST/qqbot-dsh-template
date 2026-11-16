@@ -12,7 +12,6 @@ async function test(name, run) {
 async function notice(allow) {
   const h = await bridgeHarness({ config: { ownerQQ: '42', homeGroups: ['456'], allow } });
   try {
-    h.setMode('reserved2');
     await h.notifyOwnerOnly('group:789', '⚠️ agent 处理出错：x');
     await new Promise((resolve) => setTimeout(resolve, 50));
     return JSON.parse(JSON.stringify(h.calls.sent));

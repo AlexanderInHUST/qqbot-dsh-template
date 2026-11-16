@@ -24,7 +24,6 @@ async function harness(files = {}) {
       send: { burstIntervalMinMs: 10, burstIntervalMaxMs: 10, maxGapMs: 10, longGapProbability: 0, maxSendPerHour: 0, maxSendPerMinute: 0 },
     },
   } });
-  h.setMode('reserved2');
   for (const k of [PRIV, HOME, PLAY]) {
     h.getSocialV2State(k).bootstrapSent = true;
     h.state.sessions = { ...(h.state.sessions ?? {}), [k]: `sid-${k}` };

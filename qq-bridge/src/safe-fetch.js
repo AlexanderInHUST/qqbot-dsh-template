@@ -223,7 +223,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
         headers: {
           host: url.host,
           'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36',
-          accept: binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          accept: binary === 'file' ? '*/*' : binary ? 'image/*,*/*;q=0.8' : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'accept-language': 'zh-CN,zh;q=0.9',
         },
         servername: url.protocol === 'https:' && !net.isIP(hostname) ? hostname : undefined,
@@ -262,7 +262,7 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
           if (!binary) { appendText(decoder.write(chunk)); return; }
           size += chunk.length;
           if (size > limit) {
-            fail(new Error(`图片超过大小限制（${limit} 字节）`), false);
+            fail(new Error(`${binary === 'file' ? '文件' : '图片'}超过大小限制（${limit} 字节）`), false);
             res.destroy();
             return;
           }
@@ -300,17 +300,17 @@ function attemptOnce(url, address, limit, binary, budgetMs) {
  * 而「第一个地址是坏的 IPv6」不会再白等 20 秒。
  * 所有地址都失败时抛最后一个错误（保留原始错误文案，便于日志排查）。
  */
-async function requestOnce(url, addresses, limit, binary = false) {
+async function requestOnce(url, addresses, limit, binary = false, totalMs = REQUEST_TIMEOUT_MS) {
   const list = (Array.isArray(addresses) ? addresses : [addresses]).filter(Boolean);
   if (!list.length) throw new Error(`没有可用地址：${url.hostname}`);
-  const deadline = Date.now() + REQUEST_TIMEOUT_MS;
+  const deadline = Date.now() + totalMs;
   let lastError = null;
   const attempts = Math.min(list.length, MAX_ADDRESS_ATTEMPTS);
   for (let i = 0; i < attempts; i += 1) {
     const remaining = deadline - Date.now();
     if (remaining <= 250) break;
     const budget = list.length === 1
-      ? REQUEST_TIMEOUT_MS
+      ? totalMs
       : Math.min(ATTEMPT_TIMEOUT_MS, remaining);
     const outcome = await attemptOnce(url, list[i], limit, binary, budget);
     if (outcome.ok) return outcome.result;
@@ -379,6 +379,24 @@ export async function safeFetchBuffer(urlString, maxBytes = 8 * 1024 * 1024) {
     if (!looksLikeImageBuffer(result.buffer)) {
       throw new Error(`抓取内容不是有效图片（PNG/JPEG/GIF/WebP）`);
     }
+    return { url: url.toString(), statusCode: result.statusCode, buffer: result.buffer };
+  }
+  throw new Error('重定向次数过多，已停止');
+}
+
+// 别人发给她的文件（src/app/files.js 存下来）：不管是什么格式，大小和总时限另给（几十 MB 的文件 20 秒下不完）
+export async function safeFetchFile(urlString, maxBytes = 50 * 1024 * 1024, timeoutMs = 180000) {
+  validateLimit(maxBytes, 'maxBytes');
+  const MAX_REDIRECTS = 5;
+  let { url, addresses } = await validateFetchUrl(urlString);
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    const result = await requestOnce(url, addresses, maxBytes, 'file', timeoutMs);
+    if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
+      if (!result.redirect) throw new Error(`重定向缺少 Location: ${result.statusCode}`);
+      ({ url, addresses } = await validateFetchUrl(new URL(result.redirect, url).toString()));
+      continue;
+    }
+    if (result.statusCode < 200 || result.statusCode >= 300) throw new Error(`文件下载失败：HTTP ${result.statusCode}`);
     return { url: url.toString(), statusCode: result.statusCode, buffer: result.buffer };
   }
   throw new Error('重定向次数过多，已停止');

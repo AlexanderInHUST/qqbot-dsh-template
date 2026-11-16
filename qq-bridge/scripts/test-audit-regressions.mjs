@@ -2,12 +2,11 @@
 // 防止以后有人在不知情的情况下改回去。
 //
 // 覆盖（对应体检报告里的编号）：
-//   R1  无令牌智能体调用：closed-agent 的发送/状态探测必须可用；v2 面必须仍然拒绝
+//   R1  无令牌智能体调用只能探测状态；发送和 v2 面必须拒绝
 //   R2  分条发送失败时 st/now 越界（ReferenceError）→ 额度不回滚 / 报错不可读
 //   R3  唤醒限频命中时不得直接丢弃（timeout 会留下无定时器的静默态）
 //   R4  繁忙期间暂存的 timeout/replyCheck 不得因「未读被标读」被丢弃
 //   R5  turn/end 没有对应 turn/start 时不得留下永久 collector（会话永久繁忙）
-//   R6  DSH 设置里的空 ownerQQ 不得覆盖 config.json
 //   R7  预设名必须先校验再拼路径（DSH 未连接时 resolvePresetName 会原样放行）
 //   R8  wake-config 的 triggers 只允许已知字段（防状态文件/提示词被垃圾键撑大）
 //   R9  memory-update 不得凭空建条目、不得写穿原型链
@@ -67,28 +66,22 @@ async function withServer(h, run) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// ── R1. 无令牌智能体调用（closed-agent 的发送面） ────────────────────────────
-await test('R1 无令牌智能体调用：closed-agent 可发送/探测，v2 面仍拒绝', async () => {
+// ── R1. 无令牌智能体调用只能探测状态 ─────────────────────────────────────
+await test('R1 无令牌智能体调用：只放行 /api/status，发送和 v2 面都拒', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('closed-agent');
     await withServer(h, async (port) => {
-      // 状态探测（legacyReadToolAllowed 走这条），必须回最小对象且不含管理字段
       const status = await call(port, '/api/status', { headers: { 'x-agent-call': '1' } });
       assert.equal(status.status, 200, '不带会话令牌的状态探测必须放行');
       assert.equal(status.json.ownerQQ, undefined, '智能体视图不得暴露 ownerQQ');
       assert.equal(status.json.allowGroups, undefined, '智能体视图不得暴露白名单');
-      assert.equal(status.json.mode, 'closed-agent');
 
-      // closed-agent 的私聊发送（管理员私聊）必须可用
       const sent = await call(port, '/api/send/private', {
         method: 'POST', headers: { 'x-agent-call': '1' }, body: { userId: '123', message: '你好' }
       });
-      assert.equal(sent.status, 200, `closed-agent 无令牌发送应放行，实际 ${sent.status} ${sent.body}`);
-      assert.equal(sent.json?.sent, 1, '应当真的发出一条');
-      assert.ok(h.calls.http.some((c) => String(c.url).endsWith('/send_private_msg')), '发送应走 OneBot send_private_msg');
+      assert.equal(sent.status, 403, `无令牌发送必须拒，实际 ${sent.status} ${sent.body}`);
+      assert.equal(h.calls.http.some((c) => String(c.url).endsWith('/send_private_msg')), false);
 
-      // v2 会话面绝不能因为「无令牌」退化成管理端
       const v2 = await call(port, '/api/socialV2/prompt?key=group%3A456', { headers: { 'x-agent-call': '1' } });
       assert.equal(v2.status, 403, '无令牌智能体调用不得进入 /api/socialV2/*');
       const v2send = await call(port, '/api/socialV2/send-message', {
@@ -107,7 +100,6 @@ await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送
     }
   });
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('group:456');
     const before = st.sendTimes.length;
     await withServer(h, async (port) => {
@@ -126,7 +118,6 @@ await test('R2 send-burst 失败路径不再抛 ReferenceError，并回滚发送
 await test('R3 命中唤醒限频时安排延后重试，不丢这一枪', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { maxWakePerMinute: 1 } } } });
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('group:456');
     st.wakeTimes.push(Date.now()); // 占满每分钟 1 次的窗口
     const before = h.calls.prompts.length;
@@ -141,7 +132,6 @@ await test('R3 命中唤醒限频时安排延后重试，不丢这一枪', async
 await test('R4 timeout/replyCheck 类暂存唤醒按定时器语义补发', async () => {
   const h = await bridgeHarness({ config: { socialV2: { proactive: { enabled: false } } } });
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('group:456');
     // 模拟「回合结束、未读已全部标读」，队列里留着一条到期的 timeout 与一条已经处理过的 @
     st.unread = [];
@@ -168,7 +158,6 @@ await test('R4 timeout/replyCheck 类暂存唤醒按定时器语义补发', asyn
 await test('R5 未跟踪的 turn/end 不留下 collector（否则会话永久繁忙）', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('reserved2');
     const sid = 'fixture-session';
 
     // ① 只有 turn/end（重连快照没带上 turn/start）
@@ -187,24 +176,6 @@ await test('R5 未跟踪的 turn/end 不留下 collector（否则会话永久繁
     const done = h.trackTurnEvent(sid, { type: 'turn/end', data: { turn: 9, reason: { kind: 'completed' } } });
     assert.equal(done.ended?.text, '回复内容', '正常回合的文本必须被收集');
     assert.equal(h.collectors.has(sid), false, '正常回合结束后 collector 必须清理');
-  } finally { await h.close(); }
-});
-
-// ── R6. DSH 设置里的空 ownerQQ 不覆盖 config.json ───────────────────────────
-await test('R6 DSH 设置 ownerQQ 留空时保留 config.json 的值', async () => {
-  const h = await bridgeHarness();
-  try {
-    h.api.settings.describe = async () => ({
-      result: { ok: true, value: { namespaces: [{ ns: 'qq-mode', value: { mode: 'reserved2', ownerQQ: '' } }] } }
-    });
-    await h.refreshMode();
-    assert.equal(h.cfg.ownerQQ, 123, '空串表示「不覆盖」，不能把 ownerQQ 抹成 null');
-
-    h.api.settings.describe = async () => ({
-      result: { ok: true, value: { namespaces: [{ ns: 'qq-mode', value: { mode: 'reserved2', ownerQQ: 456 } }] } }
-    });
-    await h.refreshMode();
-    assert.equal(h.cfg.ownerQQ, 456, '非空值仍然要能覆盖');
   } finally { await h.close(); }
 });
 
@@ -233,7 +204,6 @@ await test('R7 未知 preset 名直接被拒（含路径穿越形态）', async 
 await test('R8 wake-config 丢弃未知 triggers 键（不落盘、不回传模型）', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('group:456');
     // 让沉睡前观察放行：10 分钟前来过消息
     st.lastIncomingAt = Date.now() - 10 * 60 * 1000;
@@ -260,7 +230,6 @@ await test('R8 wake-config 丢弃未知 triggers 键（不落盘、不回传模�
 await test('R9 memory-update 只编辑已有条目，不写穿 Object.prototype', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('reserved2');
     const st = h.getSocialV2State('group:456');
     st.memberImpressions['群友A'] = { traits: ['友善'], interactionCount: 1, lastSeenAt: Date.now() };
     await withServer(h, async (port) => {
@@ -293,7 +262,6 @@ await test('R9 memory-update 只编辑已有条目，不写穿 Object.prototype'
 await test('R10 group:0456 与 group:456 共用同一份 wait 租约', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wait: { minMs: 300, maxMs: 800, defaultQuietMs: 0, minQuietAfterNewMs: 0 } } } });
   try {
-    h.setMode('reserved2');
     const token = h.getSocialV2State('group:456').agentToken;
     await withServer(h, async (port) => {
       const firstPending = call(port, '/api/socialV2/wait', {
@@ -381,13 +349,11 @@ await test('R15 /api/send/* 失败路径不抛作用域错误，并回滚发送�
     }
   });
   try {
-    // closed-agent = 管理员私聊通道：这条路径不需要会话令牌（正是旧工具的使用方式）。
-    h.setMode('closed-agent');
     const st = h.getSocialV2State('private:123');
     const before = st.sendTimes.length;
     await withServer(h, async (port) => {
       const res = await call(port, '/api/send/private', {
-        method: 'POST', headers: { 'x-agent-call': '1' }, body: { userId: '123', message: '你好' }
+        method: 'POST', headers: { 'x-agent-token': st.agentToken }, body: { userId: '123', message: '你好', token: st.agentToken }
       });
       assert.equal(res.status, 500, `发送失败应回 500，实际 ${res.status} ${res.body}`);
       const err = String(res.json?.error ?? '');
@@ -407,7 +373,6 @@ await test('R15 /api/send/* 失败路径不抛作用域错误，并回滚发送�
 await test('R16 appendSocialV2Message 保留 kind/emojiId/summary/subType', async () => {
   const h = await bridgeHarness();
   try {
-    h.setMode('reserved2');
     const emojiId = 'f96bf2d2d93c3530d5eb148f55206fb1';
     // 形态与 extractMediaFromSegments 的产物一致（image 段 + emoji 字段 / mface 段）。
     h.appendSocialV2Message('group:456', '群友A', '看这个', '看这个', false, false, 'msg-1001', [

@@ -10,7 +10,7 @@
 //     阈值：窗口里的评分从高到低累计到“保留比例 × 主动预计”处；评分不到 20 个时查离线表。
 // 这里是 JS 重写，不是 MaiBot 的代码；私聊不过门控（拟合数据只覆盖群聊）。
 
-export const MEDIA_PLACEHOLDER_PREFIXES = ['[表情包', '[图片', '[消息类型]', '[CQ:image', '[语音', '[文件]', '[卡片', '[表情', '[视频', '[合并转发', '[转发消息', '[拍一拍'];
+export const MEDIA_PLACEHOLDER_PREFIXES = ['[表情包', '[图片', '[消息类型]', '[CQ:image', '[语音', '[文件', '[卡片', '[表情', '[视频', '[合并转发', '[转发消息', '[拍一拍'];
 export const DEFAULT_SECONDS_SINCE_BOT = 3600;
 export const MAX_PENDING_COUNT = 20;
 export const RECENT_WINDOW_MS = 5 * 60 * 1000;

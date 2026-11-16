@@ -16,7 +16,6 @@ const msg = (userId, id, t) => ({
 await test('/ 开头的话和“换角色”：桥接不回话，消息照常给她', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 300 }, nightSleep: { enabled: false } } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(777, 1, '/签到'), h.cfg);
     await h.handleIncoming('group', '456', msg(778, 2, '这关要换角色才能过'), h.cfg);
     await h.handleIncoming('group', '456', msg(123, 3, '/reset'), h.cfg);
@@ -29,14 +28,15 @@ await test('/ 开头的话和“换角色”：桥接不回话，消息照常给
   } finally { await h.close(); }
 });
 
-// 桥接刚启动、DSH 还没就绪时模式还不是 reserved2，消息走的是这条老路（2026-10-26 重启时大群里进过一条）
+// 2026-10-26 重启时大群里进过一条“系统服务重启中”；现在 DSH 没就绪时唤醒只排队
 await test('DSH 重启中：消息排队，不替她回“系统服务重启中”', async () => {
   const h = await bridgeHarness({ config: { socialV2: { wake: { batchWindowMs: 100 }, nightSleep: { enabled: false } } } });
   try {
     h.setReady(false);
-    await h.handleIncoming('group', '456', msg(777, 11, '在吗'), h.cfg);
+    await h.handleIncoming('private', '123', msg(123, 11, '在吗'), h.cfg);
+    for (let i = 0; i < 60 && !(h.queued.get('private:123') || []).length; i += 1) await sleep(50);
     assert.deepEqual(h.calls.sent, [], '重启中不能往群里、私聊里发系统提示');
-    assert.ok((h.queued.get('group:456') || []).length >= 1, '消息要排着，恢复后补给她');
+    assert.ok((h.queued.get('private:123') || []).length >= 1, '消息要排着，恢复后补给她');
   } finally { await h.close(); }
 });
 

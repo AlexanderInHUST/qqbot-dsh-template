@@ -52,7 +52,7 @@ export function createIdleCompact(app) {
   async function runIdleCompactV2(key) {
     const ic = idleCompactCfgV2(key);
     const sid = app.state.sessions[key];
-    if (!ic.enabled || !sid || app.currentMode !== 'reserved2') return;
+    if (!ic.enabled || !sid) return;
     const st = getSocialV2State(key);
     const tokens = sessionContextTokens.get(sid) ?? 0;
     if (tokens < ic.minContextTokens) return;

@@ -43,7 +43,6 @@ async function fixture(socialV2, routes, run) {
       } },
     globals: { fetch: extrasFetch(routes, seen) },
   });
-  h.setMode('reserved2');
   for (const k of ['group:456', 'group:789', 'private:42', 'private:43']) h.getSocialV2State(k).bootstrapSent = true;
   const steers = () => h.calls.prompts.filter((p) => p.mode === 'steer').map(promptText);
   const wakes = () => h.calls.prompts.filter((p) => p.mode !== 'steer').map(promptText);

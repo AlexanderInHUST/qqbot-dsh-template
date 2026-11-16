@@ -90,7 +90,6 @@ async function fixture(run, { profile = null, socialV2 = {} } = {}) {
     files: { 'roles/测试鱼.md': CARD, 'state/current-role.json': JSON.stringify({ role: '测试鱼', mode: 'active' }) },
   });
   try {
-    h.setMode('reserved2');
     await run(h, calls);
   } finally { await h.close(); }
 }

@@ -10,7 +10,7 @@
     "*.private.md"
   ],
   "allowPaths": [
-    "docs/guides/VOICE.md",
+    "docs/示例.md",
     "scripts/console-ui-"
   ]
 }

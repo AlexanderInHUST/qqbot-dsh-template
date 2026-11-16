@@ -14,7 +14,6 @@ const promptText = (p) => p.content.map((c) => String(c?.text ?? '')).join('\n')
 await test('JSON 出错自动重试，超过上限才放行通知，正常回合清零', async () => {
   const h = await bridgeHarness({ config: { socialV2: { malformedRetry: { max: 2 } } } });
   try {
-    h.setMode('reserved2');
     const key = 'group:456';
     h.getSocialV2State(key);
     const before = h.calls.prompts.length;
@@ -32,17 +31,14 @@ await test('JSON 出错自动重试，超过上限才放行通知，正常回合
   } finally { await h.close(); }
 });
 
-await test('其他错误、关掉开关、非 reserved2 模式都不重试', async () => {
+await test('其他错误、关掉开关都不重试', async () => {
   const h = await bridgeHarness({ config: { socialV2: { malformedRetry: { enabled: false } } } });
   try {
-    h.setMode('reserved2');
     h.getSocialV2State('group:456');
     assert.equal(h.retryMalformedTurnV2('group:456', malformed), false);
     h.cfg.socialV2.malformedRetry.enabled = true;
     assert.equal(h.retryMalformedTurnV2('group:456', { kind: 'error', error: { message: 'rate limited', code: 'RATE_LIMIT' } }), false);
     assert.equal(h.retryMalformedTurnV2('group:456', malformed), true);
-    h.setMode('social');
-    assert.equal(h.retryMalformedTurnV2('group:456', malformed), false);
   } finally { await h.close(); }
 });
 

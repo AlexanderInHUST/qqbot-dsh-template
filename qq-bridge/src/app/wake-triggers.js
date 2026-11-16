@@ -379,7 +379,7 @@ export function createWakeTriggers(app) {
   }
   // 返回不评估的原因；空串表示可以评估
   function gateBlockedV2(key, st) {
-    if (cfg.socialV2?.enabled === false || app.currentMode !== 'reserved2') return '不在二代模式';
+    if (cfg.socialV2?.enabled === false) return '二代社交关着';
     if (socialV2.paused) return '已暂停';
     if (isNightSleepV2()) return '睡觉时间';
     if (shouldBlockSilentReply(key)) return '静默模式';

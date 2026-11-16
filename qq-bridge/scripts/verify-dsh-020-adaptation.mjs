@@ -11,8 +11,7 @@
 //   §4 语法检查
 //   §5 **运行中的 DSH 0.2.0 实测**（本文件的核心）：
 //        · 鉴权：本机签名密钥离线铸造 Cookie
-//        · settings/describe 可用，`qq-mode` 命名空间在列且可写
-//          （0.2.0 删除了 ctx.settings.register()，命名空间改由 entry id + Config 推导）
+//        · settings/describe 可用
 //        · agentPresets/list 含 qq-chat / qq-chat-v2
 //        · session/create 挂 preset + selectModel(deepseek-flash)
 //        · session/projections 一元 RPC 可用（读队列的主路径）
@@ -161,9 +160,8 @@ check('mcp 路径指向本仓库', mcpIds.every((id) => {
 }));
 
 const pkg = JSON.parse(fs.readFileSync(path.join(DSH_HOME, 'profiles/web/package.json'), 'utf8'));
-check('profile bundles 含 qq-mode-console', pkg.dsh.profile.bundles.includes('qq-mode-console'));
-check('qq-mode-console link 依赖已注册', String(pkg.dependencies['qq-mode-console'] ?? '').startsWith('link:'));
-check('qq-mode-console 已 link 进 node_modules', fs.existsSync(path.join(DSH_HOME, 'profiles/web/node_modules/qq-mode-console')));
+check('profile bundles 含 qq-agent-presets', pkg.dsh.profile.bundles.includes('qq-agent-presets'));
+check('删掉的 qq-mode-console 已从 profile 清掉', !pkg.dsh.profile.bundles.includes('qq-mode-console') && !('qq-mode-console' in (pkg.dependencies ?? {})));
 
 // ── 3. 仓库配置：模型 ───────────────────────────────────────────────────────
 const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
@@ -179,7 +177,6 @@ check('bridge.js 可执行代码无 router-standard 残留', !bridgeCode.include
 // setup-dsh.mjs 曾被漏改：0.1.5 适配只清了 bridge.js，脚本里仍在写死已下线的 preset 名。
 const setupCode = stripComments(fs.readFileSync(path.join(ROOT, 'scripts/setup-dsh.mjs'), 'utf8'));
 check('setup-dsh.mjs 可执行代码无 router-standard 残留', !setupCode.includes('router-standard'));
-check('setup-dsh.mjs 新装默认 closedAgentPreset 留空（交给 DSH 默认 preset）', /closedAgentPreset:\s*''/.test(setupCode));
 check('bridge.js 默认模型为 deepseek-flash', /model:\s*'deepseek-flash'/.test(bridgeCode));
 check('bridge.js 不再有「无参创建会话」兜底', !/sessions\.create\(\{\}\)/.test(bridgeCode));
 check('bridge.js 含 preset 清单/默认 preset 解析', bridgeSrc.includes('resolvePresetName') && bridgeSrc.includes('refreshPresetList'));
@@ -187,10 +184,10 @@ check('bridge.js 含 preset 清单/默认 preset 解析', bridgeSrc.includes('re
 // 安全不变量回归防线：群聊/仿真会话在 preset 缺失时必须 fail-closed。
 // 旧实现会在 preset 不在 DSH 清单里时静默回退到 DSH 默认 preset（standard，含 bash/
 // 文件读写），把本地工具暴露给 QQ 群 —— 与 RULES.md「无本地工具」的承诺直接矛盾。
-check('preset 解析带 strict 开关', /resolvePresetName\(name, \{ strict = false \} = \{\}\)/.test(bridgeCode));
-check('非 closed-agent 模式以 strict 解析 preset', /resolvePresetName\(wanted, \{ strict: true \}\)/.test(bridgeCode));
-check('群聊模式缺少 preset 时拒绝建会话（fail-closed）', /strictPreset && !preset/.test(bridgeCode));
-check('群聊模式不再重试「无 preset」建会话', /strictPreset \? \[true\] : \[true, false\]/.test(bridgeCode));
+// 2026-11-16 只剩二代以后，preset 解析一律严格：名字不在清单、清单未知都返回 ''，建会话前拒绝。
+check('preset 不在清单时不回落', /function resolvePresetName\(name\) \{[\s\S]*?if \(dshPresetIds\.length === 0\) return '';[\s\S]*?return '';\s*\}/.test(bridgeCode));
+check('缺少 preset 时拒绝建会话（fail-closed）', /const preset = sessionPreset\(key\);\s*if \(!preset\) \{\s*throw new Error/.test(bridgeCode));
+check('建会话总是带 agentPreset', /sessions\.create\(\{ workspaceId: [^}]*agentPreset: preset \}\)/.test(bridgeCode));
 
 // ── 3b. 版本身份一致性 ──────────────────────────────────────────────────────
 // v0.1.5 曾带着自称 0.1.2-alpha.1 的 package-lock.json 发布出去（package.json 却是
@@ -198,10 +195,8 @@ check('群聊模式不再重试「无 preset」建会话', /strictPreset \? \[tr
 // 复发，这里把「所有对外自称的版本号必须等于 package.json」固定下来。
 const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const lockJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
-const pluginPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugins/qq-mode-console/package.json'), 'utf8'));
 check('package-lock.json 顶层 version 与 package.json 一致', lockJson.version === pkgJson.version, `lock=${lockJson.version} pkg=${pkgJson.version}`);
 check('package-lock.json packages[""] version 与 package.json 一致', lockJson.packages?.['']?.version === pkgJson.version, `lock=${lockJson.packages?.['']?.version}`);
-check('qq-mode-console 插件版本与主包一致', pluginPkg.version === pkgJson.version, `plugin=${pluginPkg.version}`);
 for (const f of ['src/mcp-snowluma-safe.js', 'src/mcp-host-server.js', 'src/mcp-web-search-safe.js']) {
   const m = /new McpServer\(\{[^}]*version:\s*'([^']+)'/.exec(fs.readFileSync(path.join(ROOT, f), 'utf8'));
   check(`${f} 的 MCP serverInfo.version 与主包一致`, m?.[1] === pkgJson.version, `声明=${m?.[1]} 主包=${pkgJson.version}`);
@@ -249,30 +244,9 @@ check('agentPresets/list 含 qq-chat 与 qq-chat-v2', presetIds.includes('qq-cha
 // 留空时依赖的正是它，所以这里断言「注册表已装载」+「standard 预设存在」这两件可观测的事。
 const registryNs = st.value?.namespaces?.find((n) => n.ns === 'agent-preset-registry');
 check('preset 注册表命名空间已装载', registryNs !== undefined, st.value?.namespaces?.map((n) => n.ns).filter((n) => n.includes('preset')).join(', '));
-check('closed-agent 兜底所需的 standard 预设可用', presetIds.includes('standard'), presetIds.join(', '));
 
-// ── 5a. qq-mode 命名空间（0.2.0 删除了 ctx.settings.register()）──────────────
-// 0.2.0 里命名空间**不再需要注册**：它由 profile 里 id 恰好等于命名空间名的 loader
-// entry + 该插件导出的 Config（含 volatile 字段）推导出来。这条断言把「模式能写穿
-// DSH 设置」的可观测结果钉住 —— 它一旦坏掉，控制台改模式只在本地生效，下一次
-// DSH 轮询就回滚，而且不会有任何提示。
-const qqMode = st.value?.namespaces?.find((n) => n.ns === 'qq-mode');
-check('settings/describe 列出 qq-mode 命名空间', qqMode !== undefined, st.value?.namespaces?.map((n) => n.ns).length + ' 个命名空间');
-if (qqMode) {
-  check('qq-mode 带 mode 字段', typeof qqMode.value?.mode === 'string', JSON.stringify(qqMode.value));
-  check('qq-mode 带 revision（写入所需）', Number.isInteger(qqMode.revision), String(qqMode.revision));
-  // settings/update 是**多参数** RPC：args 是 { ns, patch, expectedRevision } 平铺，
-  // 不是 { request: {...} }（传 request 会被网关拒为
-  // `gateway/arguments-invalid: missing "ns", "patch"; unexpected "request"`）。
-  const writeBack = await rpc('settings/update', {
-    ns: 'qq-mode', patch: { mode: qqMode.value.mode }, expectedRevision: qqMode.revision,
-  });
-  check(
-    'settings/update 可写 qq-mode（参数为平铺多参数，非 request 包装）',
-    writeBack.ok === true,
-    writeBack.ok ? `mode=${writeBack.value?.value?.mode}` : `${writeBack.error?.code}: ${writeBack.error?.message}`,
-  );
-}
+// ── 5a. 删掉的 qq-mode 命名空间不该还在 ──────────────────────────────────────
+check('settings/describe 里没有 qq-mode 命名空间', !st.value?.namespaces?.some((n) => n.ns === 'qq-mode'));
 
 // ── 5b. session/projections：读会话队列的主路径 ──────────────────────────────
 const probeDir = path.join(os.tmpdir(), 'qq-bridge-verify-020');

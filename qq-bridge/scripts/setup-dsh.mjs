@@ -7,7 +7,7 @@
 //        @deepseek-ai/dsh-agent-preset 行；~/.dsh/.agent-presets/ 目录已不再被读取）
 //   2. 在 DSH profile 的 cordis.patch.yml 中挂载三个 MCP server：
 //      mcp-snowluma / mcp-snowluma-host / mcp-web-search-safe
-//   3. 在 profile package.json 中注册两个 bundle：qq-mode-console、qq-agent-presets
+//   3. 在 profile package.json 中注册 bundle qq-agent-presets（清掉删了的 qq-mode-console）
 //
 // 用法：
 //   node scripts/setup-dsh.mjs [profile]
@@ -83,7 +83,12 @@ function backupBeforeOverwrite(file, keep = 5) {
 //          ① 把 qq-agent-presets bundle 注册进 profile（link: 依赖 + bundles + junction）；
 //          ② 从仓库权威源（dsh/agent-presets/<preset>/）重新生成 patch 文件。
 //        旧目录不再写入、也不删除（见 reportLegacyPresetDir）。
-const BUNDLE_NAMES = ['qq-mode-console', 'qq-agent-presets'];
+const BUNDLE_NAMES = ['qq-agent-presets'];
+// 2026-11-16 删掉的 bundle：qq-mode-console 只为和 DSH 设置同步运行模式，只剩二代以后没用了。
+// 老的 DSH_HOME 里还登记着它（profile package.json、链接、profile cordis.patch.yml 里的 qq-mode 一行），这里清掉，
+// 不然 DSH 找不到插件起不来。
+const RETIRED_BUNDLES = ['qq-mode-console'];
+const isRetiredEntry = (entry) => entry?.id === 'qq-mode' || RETIRED_BUNDLES.includes(entry?.name);
 
 /** 从仓库源重新生成 bundle 里的 patch 文件（人格正文/工具面改了就必须重跑）。 */
 function regeneratePresetPatches() {
@@ -177,10 +182,11 @@ function prepareCordisPatch() {
     if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
       fatal(`invalid patch operation in ${patchFile}; file unchanged`);
     }
+    if (isRetiredEntry(operation)) { removed++; continue; }
     if (!Object.hasOwn(operation, 'insert')) { kept.push(operation); continue; }
     if (!Array.isArray(operation.insert)) fatal(`insert must be an array in ${patchFile}; file unchanged`);
     const entries = operation.insert.filter((entry) => {
-      if (!MANAGED_MCP_IDS.includes(entry?.id)) return true;
+      if (!MANAGED_MCP_IDS.includes(entry?.id) && !isRetiredEntry(entry)) return true;
       removed++;
       return false;
     });
@@ -291,6 +297,11 @@ function patchProfilePackage(links) {
   pkg.dsh = pkg.dsh || {};
   pkg.dsh.profile = pkg.dsh.profile || {};
   if (!Array.isArray(pkg.dsh.profile.bundles)) pkg.dsh.profile.bundles = [];
+  for (const name of RETIRED_BUNDLES) {
+    if (Object.hasOwn(pkg.dependencies, name)) { delete pkg.dependencies[name]; log(`package.json dependency removed: ${name}`); }
+    const at = pkg.dsh.profile.bundles.indexOf(name);
+    if (at >= 0) { pkg.dsh.profile.bundles.splice(at, 1); log(`package.json bundle removed: ${name}`); }
+  }
   for (const [name, linkDir] of Object.entries(links)) {
     const linkVal = `link:${linkDir.replace(/\\/g, '/')}`;
     if (pkg.dependencies[name] !== linkVal) {
@@ -306,21 +317,20 @@ function patchProfilePackage(links) {
   log(`profile package.json ensured: ${pkgFile}`);
 }
 
-function ensureLocalModeFile() {
-  const stateDir = path.join(REPO_ROOT, 'state');
-  const modeFile = path.join(stateDir, 'mode.json');
-  if (fs.existsSync(modeFile)) {
-    log(`state/mode.json already exists; leave as-is (current mode may be user-configured)`);
-    return;
+/** 删掉的 bundle 留下的链接：只删符号链接 / junction，真目录不碰。 */
+function removeRetiredLinks() {
+  for (const name of RETIRED_BUNDLES) {
+    for (const link of [path.join(DSH_HOME, 'profiles', PROFILE, 'node_modules', name), path.join(DSH_HOME, 'plugins', name)]) {
+      let st = null;
+      try { st = fs.lstatSync(link); } catch {}
+      if (!st) continue;
+      if (st.isSymbolicLink()) { fs.unlinkSync(link); log(`removed retired link: ${link}`); }
+      else log(`注意：${link} 不是链接，没删`);
+    }
   }
-  ensureDir(stateDir);
-  // DSH 0.1.5 起不再有 'router-standard' preset；留空表示「用 DSH 自己声明的默认 preset」，
-  // 由 bridge.js 的 resolvePresetName() 兜底（硬编码已下线的名字只会换来每次启动的误导性告警）。
-  fs.writeFileSync(modeFile, `${JSON.stringify({ mode: 'reserved2', closedAgentPreset: '' }, null, 2)}\n`, 'utf8');
-  log(`state/mode.json created with mode=reserved2 (fallback if DSH settings are not available)`);
 }
 
-// qq-mode-console / qq-agent-presets 以 link: 依赖注册进 profile package.json 后，DSH 首次启动
+// qq-agent-presets 以 link: 依赖注册进 profile package.json 后，DSH 首次启动
 // 需要先安装一次才能解析这些 bundle（否则 cold start 报 "cannot resolve profile bundle"）。
 // dsh CLI 可用时自动执行。
 function autoInstallProfileBundles() {
@@ -362,7 +372,7 @@ patchCordis(cordisPatch);
 const links = {};
 for (const name of BUNDLE_NAMES) links[name] = ensureBundle(name);
 patchProfilePackage(links);
+removeRetiredLinks();
 reportLegacyPresetDir();
-ensureLocalModeFile();
 autoInstallProfileBundles();
 log('Done. Restart DSH (or reload the profile) so the new presets/MCP take effect.');

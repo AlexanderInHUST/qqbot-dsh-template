@@ -302,7 +302,7 @@ def day_evidence(day: str) -> list[dict]:
     with LOCK:
         entries = list(memory._load()["entries"])
     for e in entries:
-        if e["subject"] == memory.RULES or not (start <= e.get("created", 0) < end):
+        if e["subject"] == memory.RULES or e.get("kind") == "file" or not (start <= e.get("created", 0) < end):
             continue
         places = list(e["seen"]) if e.get("seen") else [_place(e.get("source"))]
         about = "她自己" if e["subject"] == "self" else e["subject"]

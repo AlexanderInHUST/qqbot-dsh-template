@@ -11,7 +11,7 @@ import { SENSITIVE_RE } from '../sensitive.js';
 
 export function createTellMyself(app) {
   const {
-    PLAY_KEY, api, appendActivity, canonicalV2Key, cfg, isSessionAllowedInCurrentMode, log, shouldBlockSilentReply
+    PLAY_KEY, api, appendActivity, canonicalV2Key, cfg, isSessionAllowed, log, shouldBlockSilentReply
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let bubbleCapV2, computeGapsV2, convLabelV2, getSocialV2State, isConversationBusyV2, isOutsideGroupKeyV2,
@@ -150,10 +150,10 @@ export function createTellMyself(app) {
     if (note && SENSITIVE_RE.test(note)) return { ok: false, status: 403, error: '内容含敏感信息' };
     let targets = [];
     if (toRaw === 'all') {
-      targets = [...socialV2.conversations.keys()].filter((k) => k !== key && k !== PLAY_KEY && isSessionAllowedInCurrentMode(k));
+      targets = [...socialV2.conversations.keys()].filter((k) => k !== key && k !== PLAY_KEY && isSessionAllowed(k));
     } else if (toRaw) {
       if (toRaw === key) return { ok: false, status: 400, error: 'to 是这里自己；这里的事直接做就好' };
-      if (toRaw !== PLAY_KEY && (!/^(private|group):\d+$/.test(toRaw) || !isSessionAllowedInCurrentMode(toRaw) || !socialV2.conversations.has(toRaw))) {
+      if (toRaw !== PLAY_KEY && (!/^(private|group):\d+$/.test(toRaw) || !isSessionAllowed(toRaw) || !socialV2.conversations.has(toRaw))) {
         return { ok: false, status: 400, error: 'to 要填你待过的聊天的 key（比如 group:123）、"play:main" 或 "all"' };
       }
       if (toRaw === PLAY_KEY && stopPlay) targets = []; // 叫停就够了，不用另外记
@@ -213,7 +213,7 @@ export function createTellMyself(app) {
     if (isOutsideGroupKeyV2(to)) {
       return { ok: false, status: 403, error: '只能发到私聊和家里的小群；要那个群里的你跟大家说一声，用 qq_tell_myself 捎过去' };
     }
-    if (!isSessionAllowedInCurrentMode(to)) return { ok: false, status: 403, error: '那个聊天不在能说话的范围里，没发出去' };
+    if (!isSessionAllowed(to)) return { ok: false, status: 403, error: '那个聊天不在能说话的范围里，没发出去' };
     if (noReachOut(cfg, to)) return { ok: false, status: 403, error: '那边你不主动去找，没发出去；要跟那个人说，就去家里的小群说，或者等他来找你' };
     if (shouldBlockSilentReply(to)) return { ok: false, status: 403, error: '现在不能往那边发（静默模式），没发出去' };
     const raw = Array.isArray(body?.messages) ? body.messages : [body?.messages];

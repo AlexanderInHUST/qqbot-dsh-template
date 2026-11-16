@@ -85,7 +85,6 @@ async function fixture(nightSleep, run) {
     wake: { preSleepWaitEnabled: false, batchWindowMs: 300 }, proactive: { enabled: false }, sticker: { enabled: false },
     wait: { minMs: 100 }, nightSleep,
   } } });
-  h.setMode('reserved2');
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
   const post = (path, key, body) => new Promise((resolve, reject) => {

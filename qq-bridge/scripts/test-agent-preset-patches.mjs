@@ -105,7 +105,7 @@ console.log('## 4. bundle 声明与安全边界');
   }
   ok(true, 're-export 壳与权威实现导出同一份 apply/inject');
 
-  // fail-closed 复检（独立于 test-audit-setup-guards.mjs 的那份假 ctx 测试）。
+  // fail-closed 复检。
   let guardFn;
   const restricted = [];
   canonicalMod.apply({ tools: { restrict: ({ deny }) => restricted.push(...deny), guard: (fn) => { guardFn = fn; } } });

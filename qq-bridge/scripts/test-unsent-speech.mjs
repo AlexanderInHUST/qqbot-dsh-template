@@ -16,7 +16,6 @@ async function fixture(run) {
   const h = await bridgeHarness({ config: { ownerQQ: '42', allow: { private: ['42'], groups: ['456'] }, socialV2: {
     wake: { preSleepWaitEnabled: false }, proactive: { enabled: false }, sticker: { enabled: false },
   } } });
-  h.setMode('reserved2');
   const st = h.getSocialV2State(KEY);
   st.bootstrapSent = true;
   const sid = 'sid-unsent';

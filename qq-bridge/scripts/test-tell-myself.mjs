@@ -21,7 +21,6 @@ async function fixture(run, socialV2 = {}) {
   const h = await bridgeHarness({ config: { ownerQQ: '42', homeGroups: ['456'], allow: { private: ['42'], groups: ['456', '789'] }, socialV2: {
     wake: { preSleepWaitEnabled: false }, proactive: { enabled: false }, sticker: { enabled: false }, nightSleep: { enabled: false }, ...socialV2,
   } } });
-  h.setMode('reserved2');
   for (const k of [PRIV, HOME, BIG, PLAY]) {
     h.getSocialV2State(k).bootstrapSent = true;
     h.state.sessions = { ...(h.state.sessions ?? {}), [k]: `sid-${k}` };

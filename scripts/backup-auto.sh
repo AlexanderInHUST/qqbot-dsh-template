@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # 自动备份鱼妹（2026-11-09）。她是要一直养下去的，数据只有一份放在一块盘上不行。
-#   scripts/backup-auto.sh daily     她自己的数据：bridge-state、extras-state、dsh-home（不带 attachments/ cache/ .pnpm-store/），
+#   scripts/backup-auto.sh daily     她自己的数据：bridge-state、extras-state、yumei-files（她的文件夹）、dsh-home（不带 attachments/ cache/ .pnpm-store/），
 #                                    加 config/、roles/、.env、docker-compose.yml。2026-11 约 180MB、十几秒，传网盘三四分钟。
 #                                    再把会话里的图（dsh-home 的 attachments）按文件增量拷一份，见下面“附件”。
-#   scripts/backup-auto.sh weekly    scripts/backup.sh 的全量：七个卷（QQ 登录态、play 浏览器的 B 站登录都在），
+#   scripts/backup-auto.sh weekly    scripts/backup.sh 的全量：八个卷（QQ 登录态、play 浏览器的 B 站登录都在），
 #                                    不带会话里的图和浏览器缓存（2026-11 这两样 4.3GB 里占了 3.5GB），约 800MB，传网盘十几分钟。
 #   scripts/backup-auto.sh install   装 systemd 用户定时器（每天 05:20、每周日 05:40；关着机错过了，下次开 WSL 补跑）
 #   scripts/backup-auto.sh status    最近一次备份的情况（yumei-power.sh status 也会显示）
@@ -22,7 +22,7 @@
 #   每次 daily 只把本机 附件/ 里还没有的拷过来（核对 sha256，不对的删掉下次再拷），网盘 附件/ 也只传新的（rclone copy）。
 #   从不删：会话压缩、重置后 DSH 不用的图也留着。上传断了不白传，下次接着传没传的。
 # 配置写在 ~/.config/yumei-backup/config（shell 变量，比如 CLOUD_REMOTE=remote:鱼妹备份）。
-# 恢复：scripts/restore.sh <目录>（每天的那份会自己认出来，只恢复她的三个卷，见 restore.sh 开头）。
+# 恢复：scripts/restore.sh <目录>（每天的那份会自己认出来，只恢复她的四个卷，见 restore.sh 开头）。
 #   网盘上的先 rclone copy remote:鱼妹备份/每天/<时间> <本地目录> 拉下来；图在 remote:鱼妹备份/附件，
 #   恢复每周那份时 restore.sh 会把 backups/auto/附件（或 ATTACHMENTS=<目录>）拷回 dsh-home。
 set -uo pipefail
@@ -80,6 +80,7 @@ daily() {
   local ok=1
   vol_tar bridge-state "$out.tmp/bridge-state.tar.gz" || ok=0
   vol_tar extras-state "$out.tmp/extras-state.tar.gz" || ok=0
+  vol_tar yumei-files "$out.tmp/yumei-files.tar.gz" || ok=0
   vol_tar dsh-home "$out.tmp/dsh-home.tar.gz" --exclude=./attachments --exclude=./cache --exclude=./.pnpm-store || ok=0
   tar -czf "$out.tmp/config-and-roles.tar.gz" --exclude='config/qq-bridge/config.json.bak*' --exclude='config/extras.json.bak*' \
     config roles docker-compose.yml $(test -f .env && echo .env) || ok=0
@@ -96,7 +97,7 @@ daily() {
   { echo "time=$stamp"; echo "host=$(hostname)"; echo "git=$(git rev-parse --short HEAD 2>/dev/null)";
     (cd "$out.tmp" && sha256sum *.tar.gz); } >"$out.tmp/MANIFEST"
   cat >"$out.tmp/恢复说明.txt" <<'EOF'
-这是鱼妹每天的备份：她的记忆、人物卡、计划日记、成长档案（extras-state），聊天状态（bridge-state），
+这是鱼妹每天的备份：她的记忆、人物卡、计划日记、成长档案（extras-state），聊天状态（bridge-state），她存的文件（yumei-files），
 会话记录（dsh-home，不带会话里的图），还有配置、人格卡、.env。
 恢复（会覆盖现有的）：docker compose down && scripts/restore.sh <这个目录>
 卷全没了或换了机器：先 restore 最近的“每周”全量，再 restore 它之后最近的这份“每天”。

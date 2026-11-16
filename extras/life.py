@@ -360,6 +360,8 @@ THINK_PROMPT = (
     "为每个人/群想 0~2 个具体的念头：兑现答应过的事、分享刚看到的和对方有关的东西、关心对方提过的事有没有后续、"
     "接着上次没聊完的话。没有就不要硬想；空泛的“问问在干嘛”“好无聊找人聊天”不算，刚刚聊过的不算。"
     "她问过、催过、对方没接或者岔开了的事不算（对方多半在忙或不想说），不要想成再问一次、再催一句、换个说法接着问。"
+    "“她今天在这里已经说过”里讲过的事、“最近看到的”里标了在那里讲过的，都不算（换个说法再讲一遍也不算），"
+    "除非材料里看得出后来有了新进展，那就只想新的那一点；originality 按这个打。\n"
     "念头只能用上面材料里真有的事：材料里看不到她做过的（画画、玩游戏、看完了什么），不能想成“画好啦给你们看”“我玩通关了”，"
     "答应了还没做的就想成“想起答应过…还没弄”：比如答应画画但材料里看不到画过，就是“想起答应画…还没画”，"
     "不能说“那张图”“把画发过去”“画好先给你们看”，好像画已经有了。\n"
@@ -392,7 +394,16 @@ def _target_text(t: dict) -> str:
         rows = sorted(memory.entries_for([key]), key=lambda e: -float(e.get("updated", 0)))[:5]
     facts += [f"  记得：{e['text'][:80]}" for e in rows]
     lines = [f"  {' '.join(str(x).split())[:100]}" for x in (t.get("lastLines") or [])[-10:]]
-    return "\n".join([head, *facts, "  最近聊的：" if lines else "  最近没聊过", *lines])
+    # 2026-11-15：她今天在这里已经说过的（bridge 给的，最近 12 句），讲过的别再想成念头
+    told = [f"  {' '.join(str(x).split())[:90]}" for x in (t.get("toldToday") or [])[-12:] if str(x).strip()]
+    return "\n".join([head, *facts, "  最近聊的：" if lines else "  最近没聊过", *lines,
+                      *(["  她今天在这里已经说过：", *told] if told else [])])
+
+
+def _told_note(e: dict, keys: list[str]) -> str:
+    """见闻在这次能去找的哪几处讲过了（memory.told 记的）；别处讲过的不说是哪（大群不该知道家里聊了什么）。"""
+    there = [k for k in keys if k in (e.get("told") or {})]
+    return f"（在 {'、'.join(there)} 讲过了）" if there else ""
 
 
 def think(body: dict, complete, bot: str = "鱼妹", now: float | None = None) -> dict:
@@ -404,13 +415,14 @@ def think(body: dict, complete, bot: str = "鱼妹", now: float | None = None) -
     with LOCK:
         db = _load()
         threads = _live_threads(db, cfg, now)
+    keys = [str(t["key"]) for t in targets]
     logs = sorted((e for e in memory.entries_for(["self"]) if e.get("kind") == "log" and now - float(e.get("updated", 0)) < 86400),
                   key=lambda e: -float(e.get("updated", 0)))[:8]
     prompt = THINK_PROMPT.format(
         bot=bot, persona=_persona(body, cfg), now=str(body.get("now") or time.strftime("%H:%M"))[:30],
         mood=str(body.get("mood") or "平常")[:60], plan="、".join(body.get("plan") or []) or "（没想）",
         threads="\n".join(f"- {t['title']}：{t['next']}" for t in threads) or "（没有）",
-        logs="\n".join(f"- {e['text'][:80]}" for e in logs) or "（没有）",
+        logs="\n".join(f"- {e['text'][:80]}{_told_note(e, keys)}" for e in logs) or "（没有）",
         targets="\n\n".join(_target_text(t) for t in targets))
     obj = _json_obj(complete(prompt, 32768, effort=cfg["effort"]))
     silence = {str(t["key"]): float(t.get("silenceMinutes") or 0) for t in targets}

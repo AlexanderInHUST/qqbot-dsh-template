@@ -26,7 +26,6 @@ async function fixture(failAt, run) {
     send: { burstIntervalMinMs: 10, burstIntervalMaxMs: 10, maxGapMs: 10, longGapProbability: 0, maxSendPerHour: 0, maxSendPerMinute: 0 },
     proactive: { enabled: false }, sticker: { enabled: false },
   } } });
-  h.setMode('reserved2');
   const key = 'group:456';
   const st = h.getSocialV2State(key);
   const server = h.startConsoleServer();

@@ -13,7 +13,6 @@ async function fixture(run, wait = {}, wake = {}, key = 'group:456') {
     wait: { minMs: 100, maxMs: 600000, minQuietAfterNewMs: 100, ...wait },
     proactive: { enabled: false }, sticker: { enabled: false },
   } } });
-  h.setMode('reserved2');
   const st = h.getSocialV2State(key);
   const server = h.startConsoleServer();
   if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));

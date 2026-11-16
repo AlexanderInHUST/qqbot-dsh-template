@@ -23,7 +23,6 @@ await test('引用她发的截图：用她记的那条，旧的写上发的时�
     socialV2: { proactive: { enabled: false }, sticker: { enabled: false }, replyGate: { enabled: false } },
   } });
   try {
-    h.setMode('reserved2');
     h.setSelfIdentity('鱼妹', '999');
     // QQ 那边：5555、5556 是她发的图，7777 是 777 发的图，8888 是她发的字
     const owners = { 5555: 999, 5556: 999, 7777: 777, 8888: 999 };

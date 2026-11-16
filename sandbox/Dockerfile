@@ -1,4 +1,5 @@
 # 沙箱电脑：Xvfb 虚拟桌面 + noVNC（给你围观）+ Playwright MCP（浏览器）+ desktop MCP（截图/鼠标/键盘）
+# + 读文件（file_parse.py，8934：别人发给她的 pdf / docx / xlsx / pptx 在这里转成文字，bridge 自己不打开）
 # 没有 shell 类工具；容器里不放任何密钥，可以随时销毁重建。
 ARG NODE_IMAGE=node:22.23.2-bookworm-slim
 FROM ${NODE_IMAGE}
@@ -7,7 +8,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      xvfb fluxbox x11vnc novnc websockify xdotool imagemagick \
+      xvfb fluxbox x11vnc novnc websockify xdotool imagemagick poppler-utils \
       supervisor python3 python3-venv fonts-noto-cjk fonts-noto-color-emoji ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
@@ -29,6 +30,7 @@ COPY requirements.txt /opt/desktop-mcp/requirements.txt
 RUN python3 -m venv /opt/desktop-mcp/venv \
  && /opt/desktop-mcp/venv/bin/pip install --no-cache-dir -r /opt/desktop-mcp/requirements.txt
 COPY desktop_mcp.py /opt/desktop-mcp/desktop_mcp.py
+COPY file_parse.py /opt/desktop-mcp/file_parse.py
 COPY supervisord.conf /etc/supervisor/sandbox.conf
 COPY start-vnc.sh /usr/local/bin/start-vnc.sh
 
@@ -45,5 +47,5 @@ ENV DISPLAY=:99 \
 
 USER sandbox
 WORKDIR /home/sandbox
-EXPOSE 6080 6082 8931 8932 8933
+EXPOSE 6080 6082 8931 8932 8933 8934
 CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/sandbox.conf"]

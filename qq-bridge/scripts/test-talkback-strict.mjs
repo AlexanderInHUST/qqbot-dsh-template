@@ -30,7 +30,6 @@ async function fixture(run, socialV2 = {}, globals = {}) {
       ...socialV2,
     },
   }, globals });
-  h.setMode('reserved2');
   h.setSelfIdentity('鱼妹', '999');
   const group = (id) => {
     const st = h.getSocialV2State(`group:${id}`);

@@ -92,7 +92,7 @@ export function createModelFallback(app) {
       return false;
     }
     const c = fallbackCfgV2();
-    if (!c.enabled || app.currentMode !== 'reserved2' || socialV2.paused) return false;
+    if (!c.enabled || socialV2.paused) return false;
     if (String(cfg.dsh?.provider || 'deepseek-official') !== c.primaryProvider) return false;
     const code = wasStalled ? `${Math.round(c.stallMs / 1000)} 秒没出字`
       : String(reason.error?.code || '') || String(reason.error?.message ?? '').slice(0, 60);
@@ -124,7 +124,7 @@ export function createModelFallback(app) {
 
   function checkStallsV2() {
     const c = fallbackCfgV2();
-    if (!c.stallMs || !c.enabled || app.currentMode !== 'reserved2' || socialV2.paused) return;
+    if (!c.stallMs || !c.enabled || socialV2.paused) return;
     if (String(cfg.dsh?.provider || 'deepseek-official') !== c.primaryProvider) return;
     const now = Date.now();
     for (const [sessionId, w] of waiting) {

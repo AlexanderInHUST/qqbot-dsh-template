@@ -1,5 +1,5 @@
 #!/bin/sh
-# 在新机器上导入迁移包：恢复 .env、config/、roles/ 和七个卷，然后跑部署前检查。
+# 在新机器上导入迁移包：恢复 .env、config/、roles/ 和八个卷，然后跑部署前检查。
 # 用法：scripts/migrate-import.sh /path/to/qqbot-migrate-<时间>.tar
 # 会覆盖本项目现有的 .env、config/、roles/ 和卷（覆盖前把旧的 .env/config 存到 backups/pre-import-<时间>/）。
 set -eu

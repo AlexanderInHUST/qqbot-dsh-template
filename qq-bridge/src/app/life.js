@@ -23,7 +23,7 @@ function planOfV2(date, p) {
 
 export function createLife(app) {
   const {
-    PLAY_KEY, cfg, isSessionAllowedInCurrentMode, log, pendingWakeKeys
+    PLAY_KEY, cfg, isSessionAllowed, log, pendingWakeKeys
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
   let FREE_TIME_REASONS, MOOD_STALE_MS, convLabelV2, crossSessionSummaryOnlyV2, emptyLifeV2, whenV2,
@@ -159,6 +159,19 @@ export function createLife(app) {
       .filter((m) => m && Number(m.time) >= since && String(m.plain ?? m.text ?? '').trim())
       .slice(-limit)
       .map((m) => `${m.isSelf ? '我' : `${String(m.sender || '某人').slice(0, 16)}${m.isOwner ? '（主人）' : ''}`}：${String(m.plain ?? m.text).replace(/\s+/g, ' ').slice(0, 100)}`);
+  }
+  // 她 toldHours 小时内在这里说过的话（自由时间那边发过来的也算），“HH:MM 话”，最新的 limit 句。
+  // 主动找人时给 extras 想念头、写进唤醒提示：11-15 小群里她白天讲过的推箱子，睡前、自由时间又各讲了一遍。
+  function toldTodayV2(st, now = Date.now(), { hours, limit } = {}) {
+    const c = initiateCfgV2();
+    const h = hours ?? c.toldHours;
+    const n = limit ?? c.toldLines;
+    if (!(h > 0) || !(n > 0)) return [];
+    const hm = (t) => { const d = new Date(Number(t)); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+    return (Array.isArray(st?.recentMessages) ? st.recentMessages : [])
+      .filter((m) => m?.isSelf && Number(m.time) >= now - h * 3600000 && String(m.plain ?? m.text ?? '').trim())
+      .slice(-n)
+      .map((m) => `${hm(m.time)} ${String(m.plain ?? m.text).replace(/\s+/g, ' ').slice(0, 80)}`);
   }
   // 现在的心情（淡没了就是平常）；给 extras 想事情用
   // withWhy=false：只要那个词，不带原因（原因可能是私聊里的事，给大群想事情时不带）
@@ -380,7 +393,7 @@ export function createLife(app) {
   let lifeTickBusy = false;
   async function lifeTickV2(now = Date.now()) {
     const lc = lifeCfgV2();
-    if (!lc.enabled || lifeTickBusy || app.currentMode !== 'reserved2' || socialV2.paused) return;
+    if (!lc.enabled || lifeTickBusy || socialV2.paused) return;
     const L = socialV2.life;
     const day = lifeDayV2(now);
     lifeTickBusy = true;
@@ -406,7 +419,7 @@ export function createLife(app) {
         const since = now - 18 * 3600000;
         const chats = [];
         for (const [k, s] of socialV2.conversations) {
-          if (k === PLAY_KEY || !isSessionAllowedInCurrentMode(k)) continue;
+          if (k === PLAY_KEY || !isSessionAllowed(k)) continue;
           const lines = chatLinesV2(s, since, 25);
           if (lines.some((x) => x.startsWith('我：'))) chats.push({ label: convLabelV2(k, s), lines });
         }
@@ -456,7 +469,7 @@ export function createLife(app) {
   let initiateThinking = false;
   async function initiateTickV2(now = Date.now()) {
     const c = initiateCfgV2();
-    if (!c.enabled || initiateThinking || app.currentMode !== 'reserved2' || socialV2.paused) return null;
+    if (!c.enabled || initiateThinking || socialV2.paused) return null;
     const L = socialV2.life;
     const nextAt = () => now + minutesRangeV2(c.intervalMinutes, [30, 60]) * 60000;
     if (!L.initiateNextAt) { L.initiateNextAt = nextAt(); saveSocialV2State(); return null; }
@@ -480,7 +493,7 @@ export function createLife(app) {
       const bedOnly = ck.beforeBedMinutes > 0;
       if (!bedOnly && !inWindow) continue;
       const st = socialV2.conversations.get(k);
-      if (!st || !isSessionAllowedInCurrentMode(k)) { skipped.push(`${k} 没聊过`); continue; }
+      if (!st || !isSessionAllowed(k)) { skipped.push(`${k} 没聊过`); continue; }
       if (isConversationBusyV2(k, st)) { skipped.push(`${k} 正在聊`); continue; }
       const last = (Array.isArray(st.recentMessages) ? st.recentMessages : []).reduce((t, m) => Math.max(t, Number(m?.time) || 0), 0);
       const silence = last ? (now - last) / 60000 : 24 * 60;
@@ -500,7 +513,9 @@ export function createLife(app) {
         ? initiateBlockReason(L.initiates, k, now, { ...ck, perTargetPerDay: 0, minIntervalMinutes: 0 })
         : initiateBlockReason(bedOnly ? L.initiates.filter((x) => !x.big) : L.initiates, k, now, ck);
       if (why) { skipped.push(`${k} ${why}`); continue; }
+      const toldToday = toldTodayV2(st, now);
       targets.push({ key: k, label: convLabelV2(k, st), silenceMinutes: Math.round(silence), lastLines: chatLinesV2(st, 0, 10),
+        ...(toldToday.length ? { toldToday } : {}),
         ...(outside ? { outside: true, note: '普通群，不是家里人：只想跟群里最近聊的、大家都能接的事，别带私聊和家里群的事' }
           : bedtime ? { bedtime: true, note: '快睡觉了：睡前跟家里人分享今天玩到、看到的最想说的一两件事；别再问之前问过、催过的事' }
             : bigOnly ? { bigOnly: true, note: '白天：这里白天只说忍不住马上想告诉家里人的大事，普通的留到睡前' } : {}) });
@@ -558,6 +573,7 @@ export function createLife(app) {
       appraiseChatMoodV2,
       appraiseMoodV2,
       chatLinesV2,
+      toldTodayV2,
       extrasGetV2,
       extrasPostV2,
       personaBriefV2,

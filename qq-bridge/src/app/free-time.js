@@ -389,7 +389,7 @@ export function createFreeTime(app) {
   // 往正在玩的那一轮里插一句：到了这次定的时间说一声【可以歇了】（走不走她定）；玩满上限或到了睡觉时间让她收尾。
   // 两种各提醒一次。她不用自己琢磨什么时候该走：以前她每看完一样就想收尾，每样都只碰一下。
   async function freeTimeCurfewV2() {
-    if (app.currentMode !== 'reserved2' || socialV2.paused) return;
+    if (socialV2.paused) return;
     const st = socialV2.conversations.get(PLAY_KEY);
     const ft = st?.freeTime;
     if (!ft || ft.curfewSent || !FREE_TIME_REASONS.has(st.lastWakeReason) || !isConversationBusyV2(PLAY_KEY, st)) return;

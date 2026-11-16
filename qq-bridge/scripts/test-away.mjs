@@ -26,7 +26,6 @@ async function fixture(run, { files = {}, fetch = null, socialV2 = {} } = {}) {
       wake: { preSleepWaitEnabled: false }, proactive: { enabled: false }, sticker: { enabled: false }, nightSleep: { enabled: false },
       ...socialV2,
     } } });
-  h.setMode('reserved2');
   for (const k of [PRIV, HOME, BIG, PLAY]) {
     h.getSocialV2State(k).bootstrapSent = true;
     h.state.sessions = { ...(h.state.sessions ?? {}), [k]: `sid-${k}` };

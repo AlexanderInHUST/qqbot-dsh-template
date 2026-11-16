@@ -16,7 +16,6 @@ async function fixture(run, { wakeFirst = true, globals = {} } = {}) {
     send: { burstIntervalMinMs: 10, burstIntervalMaxMs: 10, maxGapMs: 10, longGapProbability: 0, maxSendPerHour: 0, maxSendPerMinute: 0 },
     proactive: { enabled: false }, sticker: { enabled: false },
   } } });
-  h.setMode('reserved2');
   const key = 'group:456';
   const st = h.getSocialV2State(key);
   const play = h.getSocialV2State('play:main');
@@ -115,6 +114,18 @@ test('唤醒快照带上 play 刚发的话，投递后标成已给过', () => fi
   assert.match(text, /"yourPlaySelfSent":\[\{"text":"十月二十九号上线"/);
   assert.match(text, /自由时间那边的你刚刚发到这里的/);
   assert.equal(st.recentMessages.find((m) => m.byPlay).shownToChat, true);
+}, { wakeFirst: false }));
+
+test('play 发过去半小时以后才叫醒她：那几句不在 yourPlaySelfSent 里，但还在 recent 里', () => fixture(async ({ h, st, play, call, append }) => {
+  const sent = await call('/api/socialV2/send-message', play.agentToken, { messages: ['从挖泥机底下救出来的小奶猫'] });
+  assert.equal(sent.status, 200, JSON.stringify(sent.data));
+  st.recentMessages.find((m) => m.byPlay).time -= 31 * 60 * 1000;
+  append('真可爱啊');
+  const before = h.calls.prompts.length;
+  await h.sendWakePromptV2('group:456', 'question');
+  const text = h.calls.prompts.slice(before).map((p) => p.content.map((c) => String(c?.text ?? '')).join('\n')).join('\n');
+  assert.doesNotMatch(text, /yourPlaySelfSent/);
+  assert.match(text, /"recent":\[[^\]]*从挖泥机底下救出来的小奶猫/);
 }, { wakeFirst: false }));
 
 // 假的 extras（/relay/prepare、/relay/cancel）+ 假的 OneBot

@@ -22,7 +22,6 @@ await test('配了 ownerTitlesGroups：名单里的群和私聊带称呼，别�
     allow: { private: ['123'], groups: ['456', '789'] }
   } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(123, 1, '小群里说话'), h.cfg);
     assert.ok(lastLabel(h, 'group:456').includes('你的爸爸'));
     await h.handleIncoming('group', '789', msg(123, 2, '大群里说话'), h.cfg);
@@ -36,7 +35,6 @@ await test('配了 ownerTitlesGroups：名单里的群和私聊带称呼，别�
 await test('没配 ownerTitlesGroups 时所有群都带称呼（原行为）', async () => {
   const h = await bridgeHarness({ config: { ownerTitles: { 123: '爸爸' } } });
   try {
-    h.setMode('reserved2');
     await h.handleIncoming('group', '456', msg(123, 1, '说话'), h.cfg);
     assert.ok(lastLabel(h, 'group:456').includes('你的爸爸'));
   } finally { await h.close(); }

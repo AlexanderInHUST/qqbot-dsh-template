@@ -43,7 +43,6 @@ async function fixture(socialV2, routes, run) {
     } },
     globals: { fetch: extrasFetch(routes, seen) },
   });
-  h.setMode('reserved2');
   try { await run({ h, seen }); } finally { await h.close(); }
 }
 const ON = { moodEngine: { enabled: true }, life: { enabled: true } };
@@ -604,4 +603,28 @@ test('关着的时候什么都不做：没有 extras 调用，【你现在】还
   await tick();
   assert.equal(seen.length, 0);
   assert.match(h.buildWakePromptV2(key, 'private'), /- 心情：还没写/);
+}));
+
+// 2026-11-15：白天在小群讲过的推箱子，睡前又想成念头从头讲一遍
+test('主动找人：她今天在那里说过的话带给 extras，也写进唤醒提示；一天以前的不带', () => fixture({
+  ...ON, initiate: { enabled: true, targets: ['private:42'], from: '00:00', to: '00:00', minSilenceMinutes: 60 },
+}, {
+  '/proactive/think': (b) => ({ ok: true, thoughts: b.targets.map((t) => ({ key: t.key, thought: '推箱子又推通一关', kind: 'share', score: 4.5 })) }),
+}, async ({ h, seen }) => {
+  const key = 'private:42';
+  const st = h.getSocialV2State(key);
+  h.recordSentMessagesV2(key, ['昨天的事']);
+  h.recordSentMessagesV2(key, ['爸爸！Simple 推通啦', '八个箱子一字排开']);
+  const mine = st.recentMessages.filter((m) => m.isSelf);
+  mine[0].time = Date.now() - 20 * 3600000;
+  mine[1].time = Date.now() - 3 * 3600000;
+  mine[2].time = Date.now() - 3 * 3600000 + 1000;
+  h.socialV2.life.initiateNextAt = Date.now() - 1000;
+  assert.equal((await h.initiateTickV2())?.key, key);
+  const told = seen.find((x) => x.path === '/proactive/think').body.targets[0].toldToday;
+  assert.equal(told.length, 2, JSON.stringify(told));
+  assert.match(told[0], /^\d\d:\d\d 爸爸！Simple 推通啦$/);
+  const prompt = h.calls.prompts.map(promptText).find((t) => t.includes('【你想起一件事】'));
+  assert.match(prompt, /你今天在这里已经说过：「\d\d:\d\d 爸爸！Simple 推通啦」「\d\d:\d\d 八个箱子一字排开」。这些讲过的别再讲一遍/);
+  assert.doesNotMatch(prompt, /昨天的事」/);
 }));

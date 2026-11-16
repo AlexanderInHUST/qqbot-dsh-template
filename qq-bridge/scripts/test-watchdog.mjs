@@ -13,7 +13,6 @@ const cancels = (h) => h.calls.cancelled.filter((c) => c?.method === 'session/ca
 
 async function harness(watchdog) {
   const h = await bridgeHarness({ config: { sendDelayMs: 0, socialV2: { nightSleep: { enabled: false }, watchdog } } });
-  h.setMode('reserved2');
   h.state.sessions['play:main'] = 's-play';
   return h;
 }

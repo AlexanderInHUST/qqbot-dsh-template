@@ -12,8 +12,9 @@ RUN python3 -m venv /opt/extras/venv \
 
 COPY *.py /opt/extras/
 RUN useradd --create-home --uid 10002 extras \
- && mkdir -p /data \
- && chown extras:extras /data
+ && mkdir -p /data /files \
+ && chown extras:extras /data \
+ && chown extras:1000 /files && chmod 2770 /files
 
 USER extras
 WORKDIR /opt/extras
