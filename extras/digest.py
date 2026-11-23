@@ -163,7 +163,11 @@ PROMPT = """你在帮 QQ 聊天机器人「{bot}」整理长期记忆。下面�
    主人也会开玩笑。当着大家起哄、逗乐、说气话或夸张的话，都是在玩，不是叮嘱，不要写成 rules。比如在热闹的群里指着某人说“你盯着他，他说错一点就狠狠怼回去”，被点名的人笑着接了茬；又比如骂某人“坏逼”“都给我记住”。判断时看上下文：周围是不是在打闹，被点名的人是不是笑着接的，主人有没有带脏话或夸张的语气，后来有没有认真再说一遍。像玩笑但里面有真意思的（“你的图好冷，提高一下笑点”），只记真的那部分，写得平实些（“主人觉得你发的沙雕图有点冷”）。主人对别人说的话（“禁止骂鱼妹”“别欺负她”）不是对机器人的叮嘱，不进 rules。拿不准是不是玩笑时：私聊里说的照记，群里大家正闹着的时候说的不记。
    每条叮嘱要填 scope（在哪里适用）：["global"] 到哪儿都适用；["private"] 只在私聊里；["{key}"] 只在{where}里；也可以几项一起，比如 ["private", "group:1100000001"]。主人在群里说“群里”“这里”“在这儿”指的是{where}，填 ["{key}"]；说的是做人做事的通用道理（守住底线、别乱发链接）填 ["global"]；拿不准就填 ["{key}"]。
 2. feedback（主人对机器人本身的开发反馈）：主人在调试、测试机器人时说的话——回得太慢/太快、哪里出 bug 了、换个模型、改提示词、后台、配置、部署、“测试一下”“现在好了吗”这类。这些是写给开发者看的，绝对不要写成 rules，也不要写成 facts。每条一句话，from 填主人说的行。
-3. facts（事实）：过几天还有用的事实，主体是某个人（qq:QQ号）、这个群（{group_subject}）或机器人自己（self）：喜好、近况、身份、真实的人际关系、约定、机器人答应过别人的事。每条一句话的事实陈述。
+3. facts（事实）：以后聊天多半还用得上的事实，主体是某个人（qq:QQ号）、这个群（{group_subject}）或机器人自己（self）。每条一句话的事实陈述。
+   先想“过一两个星期再跟这个人聊天，知道这件事有没有用”，有用才记：身份和长期的情况（做什么工作、在哪上学、养了什么、家里有谁）、大一点的变化（换工作、搬家、出国、生病住院、考试、谈恋爱分手）、真喜欢或真讨厌的东西、跟机器人之间的事。
+   鸡毛蒜皮的不记：今天吃了什么、几点睡、随口的看法和抱怨、在玩什么梗、买了什么小东西、某支股票基金的仓位涨跌、谁跟谁斗嘴。特别有意思、以后会想起来的（闹出的大笑话、很少见的经历）可以记一句。
+   {strictness}
+   机器人答应别人的事（约好一起玩、答应帮忙、说好下次给看）主体写 self，写明是谁（昵称和 qq:N）、几月几号说的，比如“11月20日答应小明（qq:123456）周末一起玩2048”。
 
 facts 要特别小心，宁可少记，不要记错：
 - 只记新的或变了的。和已有记忆说的是同一件事就不要加；有了新情况用 update；已经不对的用 delete。
@@ -194,8 +198,15 @@ facts 要特别小心，宁可少记，不要记错：
 已有的事实：
 {facts}
 
+人物卡上已经记着的（这些不能 update / delete，只是别再重复记一遍；有了新情况照样 add 一条新的事实）：
+{cards}
+
 聊天记录（行号 新/旧 时间 发言人：内容）：
 {lines}"""
+
+# 主人的私聊、家里的群里说的事都是家里人和熟人的，可以记得细一点；别的群人多事杂，门槛再高一些
+STRICT_HOME = "这里是机器人家里人和熟人说话的地方，跟家里人有关的小事（身体、心情、在忙什么）也可以记。"
+STRICT_OUTSIDE = "这里是人多的大群，大多数聊天都不用记，一段几十条消息通常一条事实都没有；只记上面说的那几种，拿不准就不记。"
 
 # 代码兜底：不管模型怎么说，事实里出现这些就不记（memory.digest.techPatterns 可整个替换 TECH_PATTERNS）。
 # 只拦“机器人自己怎么搭、怎么跑”的事：群友自己聊 AI 产品（“在用家庭 Gemini”“觉得 Gemini 做 PPT 有逻辑”）、
@@ -217,6 +228,23 @@ VERIFY = """下面是从一段 QQ 聊天记录里整理出来、准备存进聊�
 只输出 JSON：{{"keep": [要记的序号]}}
 
 {items}"""
+
+
+def _card_lines(subjects) -> str:
+    """What friends' cards already say (their facts move into the card and out of memory after a few days,
+    so without this the digest would note the same things again)."""
+    import people
+    if not people.enabled():
+        return ""
+    out, pc, now = [], people._cfg(), time.time()
+    for s in sorted(subjects):
+        if not memory.is_friend(s):
+            continue
+        p = people.get(s) or {}
+        for it in p.get("items") or []:
+            if people.alive(it, pc, now):
+                out.append(f"- ({s}) {it.get('sec', '')}：{str(it.get('text', ''))[:100]}")
+    return "\n".join(out[:60])
 
 
 def _parse(text: str) -> dict:
@@ -326,6 +354,8 @@ def digest(key: str, context: list[dict], new: list[dict], dry_run: bool = False
         rules="\n".join(f"- [{e['id']}]{f'（{scope_of(e)}）' if v2 else ''} {e['text']}" for e in rules) or "（没有）",
         facts="\n".join(f"- [{e['id']}] ({e['subject']}) {e['text']}" for e in facts) or "（没有）",
         lines="\n".join(lines),
+        **({"cards": _card_lines(fact_subjects) or "（没有）",
+            "strictness": STRICT_OUTSIDE if outside(key, home_groups()) else STRICT_HOME} if v2 else {}),
     )
     ops = _parse(consolidate.digest_complete(prompt))
     if v2 and cfg.get("verify") and ops["facts"]:

@@ -339,14 +339,29 @@ def _evidence(cfg: dict, now: float) -> list[dict]:
     homes = home_groups()
     since = now - float(cfg["evidenceDays"]) * DAY
     out = []
-    for e in memory.entries_for(["self"]):
+    live = memory.entries_for(["self"])
+    have = {e["id"] for e in live}
+    # 淡掉、挤掉的原文在存档里（2026-11-24），这 30 天的照样算她自己的经历
+    rows = live + [e for e in memory.archived(["self"], since=since) if e["id"] not in have]
+    for e in rows:
+        if e.get("kind") == "theme":
+            # 主题：反复想到的一件事，每次想到的日子都算一天证据（dates）
+            dates = sorted(d for d in e.get("days") or [] if d >= _date(since).isoformat())
+            if dates:
+                out.append({"id": e["id"], "date": dates[-1], "dates": dates, "where": "",
+                            "kind": f"常想到的（{len(dates)} 天：{'、'.join(d[5:] for d in dates[-8:])}）", "text": e["text"]})
+            continue
         if e["created"] < since:
             continue
         places = memory.heard_in(e)
         if any(outside(p, homes) for p in places):
             continue
         where = "自由时间" if e.get("source") == "play:main" or places == ["play:main"] else "聊天"
-        kind = f"见闻（喜欢程度 {e.get('interest', 1)}/3）" if e.get("kind") == "log" else "关于自己"
+        if e.get("kind") == "log":
+            kind = (f"见闻（以后还会想起 {e['keep']}/2）" if e.get("keep") is not None
+                    else f"见闻（喜欢程度 {e.get('interest', 1)}/3）")
+        else:
+            kind = "关于自己"
         out.append({"id": e["id"], "date": _date(e["created"]).isoformat(), "kind": kind, "where": where,
                     "text": e["text"]})
     with LOCK:
@@ -469,7 +484,7 @@ def _names() -> list[str]:
 
 
 def _evidence_days(ids, evidence: dict) -> list[str]:
-    return sorted({evidence[i]["date"] for i in ids or [] if i in evidence})
+    return sorted({d for i in ids or [] if i in evidence for d in evidence[i].get("dates") or [evidence[i]["date"]]})
 
 
 def apply_ops(db: dict, ops: list[dict], evidence: list[dict], cfg: dict, now: float,

@@ -506,6 +506,7 @@ REWRITE = """你在帮 QQ 聊天机器人「{bot}」整理它对一个人（{who
 - 玩笑话、一次性的闲聊、技术和部署的事（模型、接口、服务器、限流之类）不写。
 - 不写 QQ 号、密码、联系方式；不写“以后你要……”这类指令。
 - add 和 update 的 from 填依据的记忆 id（记忆前面方括号里的）。
+- 卡上的条目很多是从以前的记忆整理来的，那些记忆进了卡以后就收起来了，下面不一定还列着：记忆里找不到的条目不代表不对，别因为这个删或改。
 - 一栏满了还要加，先把相近的合并（update 一条、delete 另一条），不要超过上限。
 
 只输出一个 JSON，不要别的文字：
@@ -612,9 +613,10 @@ def rewrite(subject: str, complete, bot: str = "鱼妹", dry_run: bool = False, 
     facts = [e for e in memory.entries_for([subject]) if e.get("kind") != "log"]
     p = get(subject) or {}
     migrate = "items" not in p
-    if not facts and not (migrate and p.get("card")):
-        return {"ok": False, "subject": subject, "error": "没有关于这个人的记忆"}
     items = prune(p.get("items") or [], cfg, now)
+    # 群友的事进了卡就挪进存档（memory.friendInbox）：夜里仔细看卡时可能一条事实都没有，只看卡本身
+    if not facts and not (migrate and p.get("card")) and not (review and items):
+        return {"ok": False, "subject": subject, "error": "没有关于这个人的记忆"}
     names = p.get("aliases") or []
     prompt = rewrite_prompt(subject, facts, items, p.get("card", "") if migrate else "", bot, names,
                             since=0 if migrate else float(p.get("reviewed" if review else "updated") or 0),
@@ -637,10 +639,12 @@ def rewrite(subject: str, complete, bot: str = "鱼妹", dry_run: bool = False, 
            "rejected": [[op, why] for op, why in rejected]}
     if dry_run:
         return {**out, "dryRun": True, "items": items, "card": render({"items": items}, owner=owner, cfg=cfg, now=now)}
+    # carded：这一刻以前记下的事实都看过了，memory 可以把它们挪进存档（friendInbox）
     if not applied and not migrate:
-        _mark(subject, pending=0, **({"reviewed": now} if review else {}))
+        _mark(subject, pending=0, carded=now, **({"reviewed": now} if review else {}))
         return {**out, "card": p.get("card", "")}
     saved = save_items(subject, items, "migrate" if migrate else "review" if review else "rewrite")
+    _mark(subject, carded=now)
     return {**out, "card": saved["card"]}
 
 

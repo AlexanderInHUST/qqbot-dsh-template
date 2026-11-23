@@ -2,7 +2,6 @@
 // 2026-10-24 从 bridge.js 的 main() 里拆出来，代码原样搬过来的；用到的别处的东西都从 app 拿（见 bridge.js 里“装配拆出去的模块”）。
 import crypto from 'node:crypto';
 import { sanitizeForwardId } from '../forward.js';
-import { homeGroupKeys, noReachOut } from '../privacy-policy.js';
 import { DynamicReplyGate } from '../reply-gate.js';
 import { createBlockWriter, readSocialV2State, socialV2Stamp } from '../state-blocks.js';
 
@@ -168,15 +167,12 @@ export function createV2State(app) {
 
   // qqbot_agent：系统提示（出错、已停止、回复被拦截、消息未被接受……）只私聊发给 ownerQQ，
   // 不发到群里或别人的私聊；不是主人自己的会话时注明是哪个会话。同一条 10 分钟内只发一次，免得刷屏。
-  // 2026-10-28：主人的私聊不在白名单里（爸爸说以后不私聊、有事都在小群说）时，改发到家里的第一个群（homeGroups[0]）。
+  // 2026-11-19 主人：“所有的报错信息，都私聊发给我，不要发在小群里”。不管 noReachOut（那是她不主动找），
+  // 私聊不在白名单里就发不出去（出口关卡拦下、记日志），也不改发到小群。
   const ownerNoticeSentAt = new Map();
   function ownerNoticeKey() {
     const owner = cfg.ownerQQ;
-    if (!owner) return '';
-    const ownerKey = `private:${owner}`;
-    if (app.isSessionAllowed(ownerKey) && !noReachOut(cfg, ownerKey)) return ownerKey;
-    const home = homeGroupKeys(cfg).find((k) => app.isSessionAllowed(k));
-    return home || ownerKey;
+    return owner ? `private:${owner}` : '';
   }
   async function notifyOwnerOnly(key, text) {
     const ownerKey = ownerNoticeKey();

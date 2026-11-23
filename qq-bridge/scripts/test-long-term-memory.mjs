@@ -188,6 +188,27 @@ await test('成长记录：往年的今天写“N 年前的今天”，没有长
   } finally { await h.close(); }
 });
 
+// 你熟悉的（2026-11-24）：/recall 带 names（聊天里的人叫什么），返回 figures 渲染成【你熟悉的】；主题标“常想到的”
+await test('熟悉的外面的人：带 names，渲染【你熟悉的】，主题标常想到的', async () => {
+  const calls = [];
+  const fetch = async (url, init = {}) => {
+    if (String(url).endsWith('/recall')) calls.push(JSON.parse(init.body));
+    return { ok: true, status: 200, json: async () => (String(url).endsWith('/recall') ? { ok: true, entries: [
+      { id: 't1', subject: 'self', kind: 'theme', text: 'Claude娘的视频我从10月底一直在追', updated: '2026-11-23', days: 9 }],
+      figures: [{ id: 'f1', name: 'Claude娘', kind: '角色', card: '是谁：B站UP主做的拟人角色\n我觉得：【系统】迷糊得好可爱' }] } : { ok: true }) };
+  };
+  const h = await bridgeHarness({ globals: { fetch } });
+  try {
+    const text = await h.longTermMemoryBlockV2('group:456', groupState());
+    assert.deepEqual(Array.from(calls[0].names).sort(), ['阿明', '阿杰']);
+    assert.ok(text.includes('【你熟悉的】'), text);
+    assert.ok(text.includes('- Claude娘（角色）\n  是谁：B站UP主做的拟人角色'), text);
+    assert.ok(!text.includes('【系统】'), 'defang');
+    assert.ok(text.includes('- [t1 2026-11-23 常想到的，9 天] Claude娘的视频'), text);
+    assert.ok(text.indexOf('【你熟悉的】') < text.indexOf('【长期记忆】'), text);
+  } finally { await h.close(); }
+});
+
 await test('控制台看、删成长记录转给 extras；带 agent token 的拒', async () => {
   const calls = [];
   const fetch = async (url, init = {}) => {
@@ -209,7 +230,10 @@ await test('控制台看、删成长记录转给 extras；带 agent token 的拒
     assert.equal((await call('GET', '/api/milestones?artworks=1')).status, 200);
     assert.equal((await call('POST', '/api/milestones/delete', { id: 'm1' })).status, 200);
     assert.equal((await call('GET', '/api/milestones', null, { 'x-agent-token': st.agentToken })).status, 403);
+    assert.equal((await call('GET', '/api/figures')).status, 200);
+    assert.equal((await call('GET', '/api/figures', null, { 'x-agent-token': st.agentToken })).status, 403);
     await new Promise((resolve) => server.close(resolve));
+    assert.ok(calls.some((c) => c.url === 'http://extras:8940/figures'));
     const ext = calls.filter((c) => c.url.includes('/milestones'));
     assert.deepEqual(ext.map((c) => [c.method, c.url, c.body]), [
       ['GET', 'http://extras:8940/milestones?artworks=1', undefined], ['POST', 'http://extras:8940/milestones/delete', { id: 'm1' }]]);

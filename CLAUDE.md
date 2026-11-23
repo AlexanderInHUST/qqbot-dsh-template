@@ -9,8 +9,8 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 ### 账号、模型、环境
 
 - 机器人 QQ 1000000000，昵称“鱼妹”，外号 `wake.selfAliases`（小鱼、🐟姐），外号和昵称一样算“叫她”。
-- 主人（ownerQQ）900000001（阿明，提示里叫“爸爸”）。第二个主人 `extraOwnerQQ: [1600000002]`（阿红，`ownerTitles` 里叫“妈妈”），审批、夜里叫醒、叮嘱整理都和主人一样（代码里用 `isOwnerId` / digest.owners）。系统提示（出错、被拦截等）发给 ownerQQ 的私聊；它不在白名单里、或者在 `noReachOut` 里时改发到 `homeGroups` 的第一个群（v2-state.js 的 `ownerNoticeKey`），现在是后者。收不到 QQ 消息的告警例外，直接私聊阿明（见常用命令里的“收消息卡住”）。
-- 阿明的私聊：他私聊她照常回，她不主动私聊他。900000001 在 `allow.private` 里，`socialV2.noReachOut: ["private:900000001"]`（src/privacy-policy.js 的 `noReachOut`）：主动找人不找、自由时间不往里分享（他托的照发）、qq_send_elsewhere 不往里发、系统提示发在小群。人格卡写了“爸爸私聊你就好好回，但你不主动私聊爸爸”。extras `relay.conversations` 里也要有他的私聊。
+- 主人（ownerQQ）900000001（阿明，提示里叫“爸爸”）。第二个主人 `extraOwnerQQ: [1600000002]`（阿红，`ownerTitles` 里叫“妈妈”），审批、夜里叫醒、叮嘱整理都和主人一样（代码里用 `isOwnerId` / digest.owners）。系统提示（出错、被拦截、被内容审核掐断等）和收不到 QQ 消息的告警都私聊阿明（v2-state.js 的 `ownerNoticeKey`，不管 `noReachOut`；主人说所有报错都私聊他，不发在小群里）。他的私聊不在白名单里就发不出去，只记日志，不改发到小群。
+- 阿明的私聊：他私聊她照常回，她不主动私聊他。900000001 在 `allow.private` 里，`socialV2.noReachOut: ["private:900000001"]`（src/privacy-policy.js 的 `noReachOut`）：主动找人不找、自由时间不往里分享（他托的照发）、qq_send_elsewhere 不往里发（系统提示照样私聊他）。人格卡写了“爸爸私聊你就好好回，但你不主动私聊爸爸”。extras `relay.conversations` 里也要有他的私聊。
 - 白名单：阿明、阿红的私聊；群 1100000001（小测试群，`homeGroups` 里唯一的“家里的群”）；群 800000002（大群）；群 1000000004（另一个大群，规矩和 800000002 一样）；群 1100000003（技术群）。家里以外的群（含以后新加的）都按大群处理：
   - 看不到私聊和家里群的内容；
   - 主人标记写“叫名字，不叫爸爸”（`ownerTitlesGroups: ["1100000001"]`）；
@@ -55,10 +55,10 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
   - 系统提示记在会话历史里，改了以后旧的那份要等压缩才消失，要马上生效就对各会话手动 /compact（见下面的闲时压缩）。
 - 提示词里不出现管理员、控制台、ownerQQ、模型名。
 - 普通群聊大人的知识（芯片、财报、显卡渲染……）像小孩转述（不然大群里像专家讲课）：qq-chat-v2【帮人查东西】写了“我看到说……”“好像是因为……吧”、挑一两点、不报一串数字型号术语、不分条讲课；光写在提示里她查完还照念，所以 web_search / web_fetch 的结果里也带一句 `hint`（mcp-web-search-safe.js 的 `KID_HINT`，所有会话都带）。回放对比用 variant tools/replay-eval/variants/kidtone.py。
-- 桥接不替她往 QQ 里说话：没有 / 管理命令（删了 /reset /status /role /silent /active 和“换角色”拦截），/ 开头的话和别的话一样给她看；DSH 重启时消息只排队，不回“系统服务重启中”；二代模式里 DSH 的提问、审批由桥接自动跳过（两个 preset 里删了 tool-ask-user 行，她没有 `ask_user_question`；preset 自己的行注册的工具 restrict 藏不掉，只能删行），不往群里发“❓ agent 需要你回答”。重置会话、静默用控制台。还会进 QQ 的只有 `notifyOwnerOnly` 的系统提示（家里的小群）。主人标记写“主人（你的爸爸）”，不带 QQ 号。
-- 出口关卡（bridge.js 的 `qqOut(key, message, {origin})`）：往 QQ 发的所有东西（字、图、表情、语音、画、视频）都从这里出去，来路 `her`（她的话）/ `notice`（系统提示）/ `console`（控制台手动发）/ `legacy`（上游一代模式留下的来路，一代模式已删）。legacy 一律拦下；notice 只能发到 `ownerNoticeKey()`（家里的小群）；不在白名单、内容里带会话令牌的都拦。以后新加往 QQ 发东西的代码必须走 `qqOut`，别直接调 `bot.send*` 或 OneBot 的 send_*_msg。最近 300 次在控制台 `GET /api/outbound`，日志 `grep '\[出口\]'`。
+- 桥接不替她往 QQ 里说话：没有 / 管理命令（删了 /reset /status /role /silent /active 和“换角色”拦截），/ 开头的话和别的话一样给她看；DSH 重启时消息只排队，不回“系统服务重启中”；二代模式里 DSH 的提问、审批由桥接自动跳过（两个 preset 里删了 tool-ask-user 行，她没有 `ask_user_question`；preset 自己的行注册的工具 restrict 藏不掉，只能删行），不往群里发“❓ agent 需要你回答”。重置会话、静默用控制台。还会进 QQ 的只有 `notifyOwnerOnly` 的系统提示（阿明的私聊）。主人标记写“主人（你的爸爸）”，不带 QQ 号。
+- 出口关卡（bridge.js 的 `qqOut(key, message, {origin})`）：往 QQ 发的所有东西（字、图、表情、语音、画、视频）都从这里出去，来路 `her`（她的话）/ `notice`（系统提示）/ `console`（控制台手动发）/ `legacy`（上游一代模式留下的来路，一代模式已删）。legacy 一律拦下；notice 只能发到 `ownerNoticeKey()`（阿明的私聊）；不在白名单、内容里带会话令牌的都拦。以后新加往 QQ 发东西的代码必须走 `qqOut`，别直接调 `bot.send*` 或 OneBot 的 send_*_msg。最近 300 次在控制台 `GET /api/outbound`，日志 `grep '\[出口\]'`。
 - 要等一会儿的活和留话（src/app/jobs.js）：画画、做视频（以后的语音）用同一个执行器，各模块 `defineJobKindV2(kind, spec)` 声明怎么做、怎么说，`submitJobV2` 排队（间隔按记录里的 `startedAt` 算，重启后也算；`overlap` 决定是一个做完再做下一个还是开了各做各的），做好了经出口关卡发出去、记成她的话、告诉发起的窗口（在跑一轮就 steer，不在就留话），没做成要不要叫醒她看 `wakeOnFail`，重启前没做完的算没做成。校验和限额还在各自模块里。留话（以前的 drawNotes / videoNotes / tellNotes）并成 `socialV2.notes [{kind, id, to, at, …}]`（总共 60 条，每处画画 / 视频 5 条、捎话 3 条），拼进唤醒提示、这次唤醒发出去以后删掉；旧字段启动时读进来并成一份。
-- 看门狗（src/app/watchdog.js，`socialV2.watchdog`，都有代码默认）：盯着每个会话这一轮的事件。一个工具调用 `toolWarnMinutes` 30 分钟没结果记日志，`toolStopMinutes` 60 分钟还没结果就 `session/cancel` 这一轮（不清 DSH 队列，排着的消息接着给她）并在小群说一声；没工具在跑、`quietWarnMinutes` 15 / `quietStopMinutes` 30 分钟没事件同样处理；一轮跑满 `longTurnMinutes` 180 分钟只说一声。防的是 play 卡在一个不返回的工具上（比如 bili_watch）好几天，之后的唤醒全排着。控制台 `GET /api/watchdog`，日志 `grep '\[看门狗\]'`。
+- 看门狗（src/app/watchdog.js，`socialV2.watchdog`，都有代码默认）：盯着每个会话这一轮的事件。一个工具调用 `toolWarnMinutes` 30 分钟没结果记日志，`toolStopMinutes` 60 分钟还没结果就 `session/cancel` 这一轮（不清 DSH 队列，排着的消息接着给她）并私聊阿明说一声；没工具在跑、`quietWarnMinutes` 15 / `quietStopMinutes` 30 分钟没事件同样处理；一轮跑满 `longTurnMinutes` 180 分钟只说一声。防的是 play 卡在一个不返回的工具上（比如 bili_watch）好几天，之后的唤醒全排着。控制台 `GET /api/watchdog`，日志 `grep '\[看门狗\]'`。
 - 工具在 schema 层就藏，她看不到（plugins/qq-agent-presets/qq-tool-restrict.mjs，等 tools/change 再藏）：
   - 所有 `*__browser_run_code_unsafe` 都藏、都拒；
   - `hideOtherSide`：聊天看不到 play 的浏览器、桌面和 bili_watch，play 看不到聊天浏览器；
@@ -72,7 +72,13 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
     - 返回图片的工具（qq_get_message_images 等）还在 MCP。`socialV2.tools` 里关掉的不注册，改了要重建 dsh。日志 `docker compose logs dsh | grep qq-native-tools`（启动时注册了哪些、第一次调用是哪个会话）。
   - MCP 工具：src/mcp-snowluma-safe.js，剩下返回图片的那几个（qq_get_message_images、qq_get_forward_msg、qq_get_sticker_image、qq_get_self_image、qq_get_file_page）只有聊天还用它（play 整个藏了），启动时读的，改了要重建 dsh。
 - 会话压缩用中文第一人称笔记（control/patch-dsh-compaction-qq.mjs，构建时打进 dsh-compaction-basic），32~48 位十六进制串换成“（令牌）”，事情写几月几号几点、不写今天昨天。压缩用哪个模型见下面长期记忆一节。DSH 升级后锚点对不上，构建会直接失败。
-- 模型把工具参数 JSON 写坏（`MALFORMED_RESPONSE`）时，bridge 发一条【系统】让她接着做，连续最多 `malformedRetry.max` 2 次，都失败才私聊通知主人。日志 `grep 自动重试`。
+- 模型把工具参数 JSON 写坏（`MALFORMED_RESPONSE`）时，bridge 发一条【系统】让她接着做（写明常见的两种：文字没加引号、太长被截断），连续最多 `malformedRetry.max` 2 次，都失败才私聊通知主人。日志 `grep 自动重试`。
+  - 文字没加引号（`{"messages": 在玩2048呀}`）DSH 自己补上（control/patch-dsh-tool-json-bare-string.mjs，构建时打进 dsh-llm-deepseek，只在补完能解析成对象时才用），不再报错。日志 `docker compose logs dsh | grep 'repaired tool-call JSON'`（只写工具名和键）。DSH 升级后锚点对不上构建会失败。
+- DeepSeek 的内容审核掐断她的输出（“unsupported stop reason refusal”，DSH 也报成 `MALFORMED_RESPONSE`）不按 JSON 写坏重试，走 wake.js 的 `handleRefusedTurnV2`（不然同一条消息会让她一轮接一轮被掐）：
+  - 这一轮开始前到的未读在 unread 和 recentMessages 里都换成“[这条消息被过滤了，看不到原话]”（`filtered`）；
+  - 这一轮还没说话、没调工具，用 DSH `session/fork` 从上一轮结束处（bridge.js 的 `idleSeqs` / `turnCuts`，`forkSessionV2`）分出新会话换上，被掐的几轮从历史里剪掉；
+  - 叫醒她的一轮再叫一次（`socialV2.refusalRetry {enabled, max:1}`，提示写几条看不到了、别猜别追问），还被掐或不是叫醒她的一轮才记成看过、私聊阿明说一声。
+  - 🇹🇼 在 `defang` 和压缩笔记（patch-dsh-compaction-qq.mjs 的 `QQ_REFUSAL_RE`）里换成“[旗子表情]”（她一复述就被掐，光读到不会）。以后发现新的触发词，两处一起加。日志 `grep '\[拒答\]'`。
 
 ### 什么时候叫醒她
 
@@ -267,7 +273,19 @@ QQ 群“仿真群友”鱼妹：QQ 小号（SnowLuma）+ qq-bridge 二代仿真
 - 自动整理 extras/digest.py：bridge 每条白名单消息 POST `/digest/notify`，攒够 15 条且安静 10 分钟才用 OneBot 历史拉一次。
   - 抽出 facts、主人叮嘱 rules、开发反馈 feedback。rules 带 `scope`，只认主人说的行；feedback 存 /data/feedback.json，从不给她。
   - `antiPollution` 过滤玩笑、技术闲聊（`tech_reason`）。日志 `grep digest`。
+  - 只记以后用得上的（不然记的大多是鸡毛蒜皮）：提示分家里（`STRICT_HOME`，家里人的小事也记）和大群（`STRICT_OUTSIDE`，一段几十条通常一条都不记，拿不准不记）；她答应群友的事记在 self 下；抽的时候给它看这些人卡上已有的条目（`_card_lines`），卡上有的不再记。
 - 挑选和遗忘 extras/memory.py：按字二元组 + IDF 算相关度，强度按半衰期衰减，聊到了才算 hit 延长。每天 4 点 consolidate。不用向量库，因为 DeepSeek 没有 embedding 接口。
+- 记“以后会用到的”（人记东西是按以后会不会用到留的；只按条数上限挤，她反复看的东西一两天就被随手刷到的挤掉）：
+  - 群友的事只进他们的人物卡（`memory.friendInbox`，要 people 开着）：唤醒时（带 key 的 recall）不给原文，只给卡。people.py 改过卡、事实过了 `inboxDays` 4 天就挪进存档（`carded`），一直没进卡的 `inboxMaxDays` 14 天后也挪（`inbox-expired`）。4 点 `flush_inbox` 先给有到期事实、又比上次改卡新的人改一次卡再挪。群友没有“印象”：折印象只折 self 和群。主人的事实照旧给、照旧留。
+  - 见闻的半衰期夜里定（extras/themes.py）：4 点看刚过完的那天（她的一天从 05:00 算）的见闻，模型给 `keep` 0 鸡毛蒜皮 / 1 可能聊到 / 2 多半还会用到，半衰期 `keepHalfLifeDays` 1 / 4 / 14 天，代替她自己填的 interest（她填的大多是“超喜欢”）。刚记的 `logProtectHours` 36 小时内挤不掉，`maxLogs` 300（config/extras.json，代码默认 30）。
+  - 主题（kind=theme）：同一样东西在不同的日子反复出现（同一个角色、UP 主、游戏、番）并成一条，带 `days`、`members`、`figure`。新主题要 2 个不同日子的见闻（代码查），半衰期 `themeHalfLifeDays` 21 × (1 + 0.5×(天数−1))、最多 6 倍，最多 `maxThemes` 80 条，每次唤醒最多 `recallThemes` 3 条。
+  - 存档（/data/memory-archive.json，`archiveMax` 5 万条）：淡掉（faded）、被挤掉（evicted）、折成印象（folded）、她自己忘掉（forgot）、进了卡（carded / inbox-expired）的原文都挪到这里，唤醒时不给，夜里的主题、外面的人、成长记录回看时读得到（forgot 的不给）。一次性迁移用的还有 `backfill-session`（会话记录里找回的旧见闻）、`migrate-trivial`（挑出来的鸡毛蒜皮）。
+  - 日志 `grep '\[记性\]'`。
+- 她熟悉的外面的人（extras/figures.py，/data/figures.json，配置 extras 的 `figures`，都有代码默认）：自由时间常碰到的角色、UP 主、作品里的人各一张卡（name、kind、aliases、fuzzy、是谁 / 我觉得 / 看过的 / 最近四栏各 `secChars` 300 字、days、loved、chatted，留 5 版）。
+  - 4 点看刚过完那天的见闻（含存档）、B 站看过的、聊天里提到已有卡的记忆，模型提改动；新卡要 2 个不同日子的依据，或者她特别喜欢，或者聊天里聊到过。`60 + 15×天数`（最多 365）天没再碰到挪进 faded，再碰到就回来。
+  - 唤醒时聊天里出现 name / aliases 就带卡；只出现会撞车的 fuzzy 名字（“Claude”也可能是模型），问一次 DeepSeek 是不是在说它（带最近几句和这里的群名片，`figures.check.timeoutSec` 2.5 秒没答当不是，15 分钟缓存）。bridge 把群名片当 `names` 发给 `/recall`。一次最多 `maxCards` 2 张、每张 `cardChars` 400 字，写成【你熟悉的】（wake-prompt.js），家里以外的群去掉带家里人的句子。bili_watch 看到熟悉的结果带 `youKnow`。
+  - 不进长大的证据、不进成长记录。控制台 `GET /api/figures`（转 extras `/figures`）。日志 `grep '\[熟悉的\]'`。
+- 4 点 consolidate 的顺序（consolidate.py 的 `run_once`，每步 `_step` 单独兜错）：成长记录 → 删淡掉的 → 折印象（只 self 和群）→ 主题和 keep → 人物卡 prune、夜里过一遍 → `flush_inbox` → 外面的人 → 长大 → 清文件。
 - 按来路过滤（`recall(key=…)`，MCP 的 memory_recall 也带 key）：家里以外的群里，别人的事实只给全部听自家以外群的（`seen` / source，“?” 不给）；她自己的事照给，但提到主人的（主人、爸爸妈妈、主人 QQ 号、卡上的名字）不给；rules 照旧按 scope。私聊、家里的群全给。折成印象时 `seen` 取并集。
 - 维护性质的活用 aiohub 的 `claude-opus-5-5`（effort high），别的（聊天、心情、生活、自洽、主动找人、头像、搜索）还是 DeepSeek：
   - 4 点整理（extras 的 `memory.consolidate.llm`）和白天的 digest（抽取事实、核对、人物卡快改，`memory.digest.llm`）。两处都是 `{api:"anthropic", model, apiKeyEnv:"AIOHUB_API_KEY", effort:"high"}`，调不通就换回 DeepSeek（日志 `grep 换回默认模型`），删掉 `llm` 就用 DeepSeek。opus 回 `stop_reason=refusal` 也会换：记忆里把有人怎么套她写得太细（注入、色情网站）就会被拒，看到每晚都拒就按人物卡挨个试出是哪条、改写（先备份）。
@@ -374,9 +392,9 @@ docker compose up -d --force-recreate dsh bridge ui-forward
   - 相关度：bridge 唤醒时把最近 12 条聊天当 `query` 发给 `/recall`，按字二元组 + IDF 算相关度。
   - 强度：`0.5^(天数/半衰期)`，半衰期 self 7 天、人/群 30 天（`memory.halfLifeDays`），“印象”（kind=summary）×4。
   - 排序：每个主体取 `0.6×相关 + 0.4×强度` 的前 15 条。光被注入不刷新；只有真聊到了（相关度 ≥ hitThreshold 或共有 2 个以上稀有词）才算一次 hit，hit 会重置时钟，半衰期 ×(1+0.5×hits)，12 小时内只加一次。稀有词：中文二元组要落在两边都有的三字词组里（共有三元组）、且只在 ≤4 条记忆里出现才算数；单独撞上的二元组（“吃饭”“上班”）只帮排序（on_topic 最多 0.5），不算 hit。不这样的话记忆少时什么二元组都像稀有词，随口一句“记得吃饭”就会让不相干的长笔记一直“又聊到了”。见闻另外总带最新记的 `memory.recallRecentLogs`（默认 4）条。
-  - 超过上限（maxSelf 80 / maxPerSubject 40 / 主人 `maxPerOwner` 300，config/extras.json 里改的，代码默认 100）时淘汰同一池里最淡的一条。
-  - “见闻”：self 里 kind=log 的条目，play:main 记的、或带 `interest` 的 self 笔记都算。单独上限 `maxLogs`（config/extras.json 里是 60，代码默认 30），只在见闻之间淘汰，挤不掉设定和人的记忆；每次唤醒最多带 `recallLogs` 8 条，提示里标“见闻”。半衰期按她填的 interest（1 一般 / 2 有意思 / 3 超喜欢 → `logHalfLifeDays` 2/5/14 天），聊到了照样 hit 延长；夜里 consolidate 不把见闻折成印象，淡了就删。
+  - 超过上限（maxSelf 80 / maxPerSubject 40 / 主人 `maxPerOwner` 300，config/extras.json 里改的，代码默认 100）时淘汰同一池里最淡的一条（挪进存档）。
+  - “见闻”：self 里 kind=log 的条目，play:main 记的、或带 `interest` 的 self 笔记都算。单独上限 `maxLogs`（config/extras.json 里是 300，代码默认 30），只在见闻之间淘汰，挤不掉设定和人的记忆；每次唤醒最多带 `recallLogs` 8 条，提示里标“见闻”。半衰期夜里看过以后按 keep 定（见上面“记以后会用到的”），还没看过的按她填的 interest（1 一般 / 2 有意思 / 3 超喜欢 → `logHalfLifeDays` 2/5/14 天），聊到了照样 hit 延长；夜里 consolidate 不把见闻折成印象，淡了挪进存档。
   - 见闻去重和“讲过了”：不做的话她会把同一篇文章读好几遍、记好几条，再在各个群里各讲几遍（见闻每次唤醒都给，她自己讲的话还被当成“又聊到了”延长记忆）。现在 memory_note 记见闻时和已有的同一件事（共有 `memory.logDupMinShared` 8 个以上词、加权重合度 ≥ `logDupOverlap` 0.25，设 0 关）不再新记，返回 `duplicate` + “这个你之前看过了，换一样新鲜的吧”，interest 取大的。bridge 在 `recordSentMessagesV2` 里把她发的话 POST extras `/memory/told {key,text}`（play 用自己令牌发进聊天的也算，play:main 本身不算；`socialV2.longTermMemory.reportTold:false` 关），重合度 ≥ `memory.logTold.minOverlap` 0.25 且共有 `minRare` 4 个以上稀有词的见闻记进 `told[key]`（`logTold.enabled:false` 关）。讲过的见闻 /recall 带 key 时不再当话头给，聊天里又聊到它（on_topic）才带上，提示里标“这里讲过了”或“别处讲过了”（不说是哪）；在讲过的会话 24 小时内不算 hit。`memory.dedup_logs(dry_run)` 把已有的同一件事折进最早那条。日志 `grep 讲了见闻`。
-  - 每天 4 点 consolidate：先删强度 < 0.03 的；再把每个主体里强度 < 0.5 的原始记忆（≥5 条）让 LLM 折成最多 6 条“印象”；印象超过 8 条就把最淡的合并。rules 永远不碰。
+  - 每天 4 点 consolidate：先把强度 < 0.03 的挪进存档；再把 self 和群里强度 < 0.5 的原始记忆（≥5 条）让 LLM 折成最多 6 条“印象”（原文进存档）；印象超过 8 条就把最淡的合并。人（主人、群友）不折印象。rules 永远不碰。
 - 沙箱浏览器（经 egress 代理）能正常逛：tophub、豆瓣、bgm.tv、萌娘百科、维基词条（Special:Random 会 429）、BBC 中文、hk01、虎扑、v2ex、果壳、少数派、IT之家、xkcd、NASA APOD、下厨房、2048（2048.io、play2048.co 都行；play2048.co 以前在 sandbox 线程数有上限时会把浏览器拖崩，现在不限）、Poki、4399、lichess、sudoku、neal.fun、AcFun，游戏站 Poki、CrazyGames、4399、7k7k、itch.io、Coolmath、Miniclip（neal.fun 无头浏览器会被 Cloudflare 拦，现在两个浏览器都是有界面的，没事）。打不开：知乎（登录）、贴吧（验证码）、reddit（人机验证）、微博、小红书、lofter，别往菜单里加。主人不让看的网站加在 egress/squid.conf 的 `owner_blocked` 和 web_fetch（mcp-web-search-safe.js 的 `OWNER_BLOCKED_HOSTS`）两处。
 - 不要把 `.env`、`config/qq-bridge/config.json`、迁移包提交进 git。

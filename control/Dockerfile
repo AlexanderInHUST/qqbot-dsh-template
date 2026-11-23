@@ -24,6 +24,11 @@ COPY control/patch-pi-ai-tool-schema-null.mjs /opt/qqbot-patches/
 RUN node /opt/qqbot-patches/patch-pi-ai-tool-schema-null.mjs \
       "$(npm root -g)/@deepseek-ai/dsh/node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js"
 
+# DeepSeek 偶尔把工具参数里的文字写成不带引号的（{"messages": 在玩2048呀}），整步报 MALFORMED_RESPONSE；补上引号，见脚本注释
+COPY control/patch-dsh-tool-json-bare-string.mjs /opt/qqbot-patches/
+RUN node /opt/qqbot-patches/patch-dsh-tool-json-bare-string.mjs \
+      "$(npm root -g)/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js"
+
 # 鱼妹的会话压缩时用中文、第一人称记笔记，不抄令牌和编号（原来是给写代码的助手用的英文模板），见脚本注释
 COPY control/patch-dsh-compaction-qq.mjs /opt/qqbot-patches/
 RUN node /opt/qqbot-patches/patch-dsh-compaction-qq.mjs \

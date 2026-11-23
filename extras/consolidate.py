@@ -3,7 +3,11 @@
 - fold faded raw memories of a subject (strength < foldBelow, at least minFold of them) into a few
   summary sentences that keep the memorable specifics; summaries fade 4x slower;
 - when a subject has more than maxSummaries summaries, merge the weakest ones together.
-The owner's rules are never touched."""
+The owner's rules are never touched.
+
+2026-11-24 起每晚的顺序：成长记录 → 淡掉的挪进存档 → 折印象（只给她自己和群；群友的事在人物卡里、主人的
+一条条留着）→ themes.py 看刚过完的那天的见闻（keep、主题）→ 人物卡清理和仔细过一遍 → 群友的事进了卡就挪进
+存档（flush_inbox）→ figures.py 她熟悉的外面的人 → 长大 → 清文件。哪一步失败了记下来，后面的照做。"""
 
 import json
 import os
@@ -143,28 +147,75 @@ def _fold(subject: str, rows: list[dict], target: int) -> str:
     return f"{len(rows)} -> {len(ids)}" if ids else "skipped: empty"
 
 
+def _step(done: dict, name: str, fn):
+    """One night step; a failure is written down and the next steps still run."""
+    try:
+        r = fn()
+        if r:
+            done[name] = r
+    except Exception as exc:  # noqa: BLE001 - tried again tomorrow night
+        done[name] = f"skipped: {exc}"
+
+
+def flush_inbox(complete=None) -> dict:
+    """Friends' facts are an inbox for their cards (memory friendInbox): cards that haven't seen their due
+    facts yet are rewritten first, then the facts move to the archive."""
+    import people
+    if not memory.inbox_on():
+        return {}
+    complete = complete or night_complete
+    out = {}
+    db = people.all_people()
+
+    def carded(subject):
+        p = db.get(subject) or {}
+        if p.get("carded"):
+            return float(p["carded"])
+        return float(p.get("updated") or 0) if int(p.get("pending", 0)) <= 0 else 0.0
+
+    for subject, rows in memory.inbox_due().items():
+        if max(e["created"] for e in rows) <= carded(subject):
+            continue
+        try:
+            r = people.rewrite(subject, complete)
+            out[subject] = f"{len(r.get('applied') or [])} changes"
+        except Exception as exc:  # noqa: BLE001 - facts stay until the card has them (or inboxMaxDays)
+            out[subject] = f"skipped: {exc}"
+    db = people.all_people()
+    gone = memory.archive_inbox({s: carded(s) for s in db})
+    if gone:
+        out["archived"] = len(gone)
+    return out
+
+
 def run_once() -> dict:
     cfg = _cfg()
     done = {}
+    import figures
     import milestones
+    import people
+    import selfprofile
+    import themes
+    import workspace
     if milestones.enabled():  # 先挑成长记录：昨天的记忆还没被淡掉、折掉
-        try:
-            done["milestones"] = milestones.pick_night(night_complete)
-        except Exception as exc:  # noqa: BLE001 - the day is tried again tomorrow night
-            done["milestones"] = f"skipped: {exc}"
+        _step(done, "milestones", lambda: milestones.pick_night(night_complete))
     gone = memory.drop_faded(float(cfg["forgetBelow"]))
     if gone:
         done["forgotten"] = [f"{e['subject']} {e['text'][:30]}" for e in gone]
+    # 折成印象只给她自己和群：群友的事在人物卡里，主人的事一条条留着（2026-11-24）
     for subject, rows in memory.by_subject().items():
-        faded = [e for e in rows if e.get("kind") not in ("summary", "log") and e["strength"] < float(cfg["foldBelow"])]
+        if not (subject == "self" or subject.startswith("group:")):
+            continue
+        faded = [e for e in rows if e.get("kind") not in ("summary", "log", "theme") and e["strength"] < float(cfg["foldBelow"])]
         if len(faded) >= int(cfg["minFold"]):
-            done[subject] = _fold(subject, faded, max(1, min(6, len(faded) // 5)))
+            _step(done, subject, lambda: _fold(subject, faded, max(1, min(6, len(faded) // 5))))
         summaries = [e for e in memory.by_subject().get(subject, []) if e.get("kind") == "summary"]
         extra = len(summaries) - int(cfg["maxSummaries"])
         if extra > 0:
             weakest = sorted(summaries, key=lambda e: e["strength"])[: max(extra + 1, len(summaries) // 2)]
-            done[subject + " summaries"] = _fold(subject, weakest, 2)
-    import people
+            _step(done, subject + " summaries", lambda: _fold(subject, weakest, 2))
+    if themes.enabled():  # 刚过完的那天的见闻：以后用不用得到（keep）、常想到的事（主题）
+        _step(done, "themes", lambda: themes.run_night(night_complete))
     if people.enabled():  # a careful look over every card that changed today (by day it's quick edits)
         pruned = people.prune_all()  # faded / done items go for good
         if pruned:
@@ -178,10 +229,11 @@ def run_once() -> dict:
                 done[subject + " card"] = f"{len(r.get('applied') or [])} changes"
             except Exception as exc:  # noqa: BLE001 - keep the old card
                 done[subject + " card"] = f"skipped: {exc}"
-    import selfprofile
+        _step(done, "inbox", flush_inbox)  # 进了卡的群友的事挪进存档
+    if figures.enabled():  # 她熟悉的外面的人（看主题之后：主题里记着是关于谁的）
+        _step(done, "figures", lambda: figures.run_night(night_complete))
     if selfprofile.enabled():  # she grows up a little (most nights nothing changes)
         done["self profile"] = evolve_profile()
-    import workspace
     try:  # 最后清文件：上面淡掉、折掉的文件记忆，它们的文件这时候一起删
         done["files"] = workspace.cleanup()
     except Exception as exc:  # noqa: BLE001 - files just wait for tomorrow night

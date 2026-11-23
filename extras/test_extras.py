@@ -1477,15 +1477,21 @@ class RecallWhereTest(unittest.TestCase):
 
     def test_impressions_keep_where_they_were_heard(self):
         import consolidate
+        memory.note("self", "鱼妹学会了用蜡笔涂颜色", "digest:group:800000002")
         db = memory._load()
         for e in db["entries"]:
             if e["subject"] == self.HUANG:
                 e["updated"] -= 400 * 86400
+            elif e["subject"] == "self" and e.get("kind") != "log":
+                e["updated"] -= 10 * 86400  # 淡了（< 0.5）但还没忘（> 0.03）
         memory.save_json(memory.PATH, db)
         with mock.patch("consolidate.complete", return_value='["十月里聊过游戏和电影"]'):
             consolidate.run_once()
         summary = next(e for e in memory._load()["entries"] if e.get("kind") == "summary")
+        self.assertEqual(summary["subject"], "self")
         self.assertIn("private:900000001", summary["seen"])
+        # 主人的事不折成印象（2026-11-24），一条条留着
+        self.assertIn("私下把鱼妹当女儿养", self.texts(None))
         self.assertNotIn("十月里聊过游戏和电影", self.texts("group:800000002"))
         self.assertIn("十月里聊过游戏和电影", self.texts("group:1100000001"))
 
@@ -1495,7 +1501,7 @@ class NightModelTest(unittest.TestCase):
     LLM = {"api": "anthropic", "model": "claude-opus-5-5", "apiKeyEnv": "AIOHUB_API_KEY", "effort": "high"}
 
     def setUp(self):
-        reset("memory.json", "people.json")
+        reset("memory.json", "people.json", "memory-archive.json", "themes-night.json", "figures.json", "bili-watched.json")
         write("extras.json", {"memory": {"consolidate": {"llm": self.LLM}, "digest": {"llm": self.LLM}},
                               "people": {"enabled": True}})
         write("bridge.json", {"ownerQQ": 900000001, "homeGroups": ["1100000001"]})
@@ -2074,6 +2080,382 @@ class WorkspaceCleanupTest(unittest.TestCase):
             result = consolidate.run_once()
         self.assertEqual(result["files"]["removed"], ["group:1100000001 ccc333.txt"])
         self.assertFalse(os.path.exists(old))
+
+
+def put_log(text, ts, interest=2):
+    """A 见闻 written at time ts."""
+    memory.note("self", text, "play:main", interest=interest)
+    db = memory._load()
+    e = next(e for e in db["entries"] if e["text"] == text)
+    e["created"] = e["updated"] = ts
+    memory.save_json(memory.PATH, db)
+    return e["id"]
+
+
+class MemoryArchiveTest(unittest.TestCase):
+    """2026-11-24：淡掉、挤掉、折掉、进了卡的记忆挪进存档，夜里回看还读得到。"""
+    HUANG = "qq:900000001"
+
+    def setUp(self):
+        reset("memory.json", "memory-archive.json", "people.json")
+        write("extras.json", {"people": {"enabled": True},
+                              "memory": {"maxSelf": 100, "logDupOverlap": 0, "inboxDays": 4, "inboxMaxDays": 14}})
+        write("bridge.json", {"ownerQQ": 900000001, "homeGroups": ["1100000001"]})
+
+    def tearDown(self):  # 别的测试跑 consolidate.run_once 时不该看到这里留下的见闻、视频、卡
+        reset("memory.json", "memory-archive.json", "themes-night.json", "figures.json", "bili-watched.json", "people.json")
+
+    def test_archive_and_add_archived(self):
+        memory.note("self", "鱼妹的头发是粉色的", "digest:group:1100000001")
+        memory.note("rules", "别发链接", "digest:private:900000001", trusted=True)
+        ids = [e["id"] for e in memory.entries_for(["self", "rules"])]
+        gone = memory.archive(ids, "faded")
+        self.assertEqual([e["text"] for e in gone], ["鱼妹的头发是粉色的"])  # rules never go
+        self.assertEqual(len(memory.entries_for(["rules"])), 1)
+        arc = memory.archived(["self"])
+        self.assertEqual(arc[0]["archiveReason"], "faded")
+        memory.note("self", "不想要的一条", "play:main")
+        memory.archive([e["id"] for e in memory.entries_for(["self"])], "forgot")
+        self.assertEqual([e["text"] for e in memory.archived(["self"])], ["鱼妹的头发是粉色的"])
+        self.assertEqual(len(memory.archived(["self"], with_forgotten=True)), 2)
+        old = {"id": "old00001", "subject": "self", "kind": "log", "text": "十月看了 Claude娘 的视频",
+               "created": time.time() - 30 * 86400, "updated": time.time() - 30 * 86400, "hits": 0, "source": "play:main"}
+        self.assertEqual(memory.add_archived([old, dict(old, id="old00002"), dict(old, id="x", text="鱼妹的头发是粉色的")],
+                                             "backfill-session"), 1)
+        self.assertEqual(memory.add_archived([old], "backfill-session"), 0)
+        self.assertEqual(len(memory.archived(["self"], since=time.time() - 31 * 86400, until=time.time() - 29 * 86400)), 1)
+
+    def test_friend_facts_are_an_inbox_for_their_card(self):
+        memory.note("qq:222222", "爱打王者荣耀", "digest:group:1100000001")
+        memory.note("qq:222222", "在杭州上学", "digest:group:1100000001")
+        memory.note("qq:222222", "刚记的一条", "digest:group:1100000001")
+        memory.note(self.HUANG, "已预购影之刃零", "digest:group:1100000001")
+        texts = {r["text"] for r in memory.recall([self.HUANG, "qq:222222"], "", key="group:1100000001")}
+        self.assertIn("已预购影之刃零", texts)
+        self.assertNotIn("爱打王者荣耀", texts)  # 卡上有，不给原文
+        self.assertIn("爱打王者荣耀", {r["text"] for r in memory.recall(["qq:222222"], "")})  # 她自己查照给
+        age(memory, "爱打王者荣耀", 5)
+        age(memory, "在杭州上学", 15)
+        age(memory, "已预购影之刃零", 30)
+        due = memory.inbox_due()
+        self.assertEqual({e["text"] for e in due["qq:222222"]}, {"爱打王者荣耀", "在杭州上学"})
+        self.assertNotIn(self.HUANG, due)  # 主人的事一条条留着
+        gone = memory.archive_inbox({})  # 没进过卡：只有过了 inboxMaxDays 的走
+        self.assertEqual([e["text"] for e in gone], ["在杭州上学"])
+        self.assertEqual(memory.archived(["qq:222222"])[0]["archiveReason"], "inbox-expired")
+        gone = memory.archive_inbox({"qq:222222": time.time() - 86400})
+        self.assertEqual([e["text"] for e in gone], ["爱打王者荣耀"])
+        self.assertEqual({e["archiveReason"] for e in memory.archived(["qq:222222"])}, {"inbox-expired", "carded"})
+        self.assertEqual([e["text"] for e in memory.entries_for(["qq:222222"])], ["刚记的一条"])
+
+    def test_no_inbox_without_cards(self):
+        write("extras.json", {"people": {"enabled": False}})
+        memory.note("qq:222222", "爱打王者荣耀", "digest:group:1100000001")
+        age(memory, "爱打王者荣耀", 30)
+        self.assertIn("爱打王者荣耀", {r["text"] for r in memory.recall(["qq:222222"], "", key="group:1100000001")})
+        self.assertEqual(memory.inbox_due(), {})
+
+    def test_keep_and_theme_strength(self):
+        cfg = memory._cfg()
+        now = time.time()
+        log = {"subject": "self", "kind": "log", "interest": 3, "updated": now - 86400, "hits": 0}
+        self.assertAlmostEqual(memory.strength(dict(log, keep=0), cfg, now), 0.5, places=3)
+        self.assertAlmostEqual(memory.strength(dict(log, updated=now - 14 * 86400, keep=2), cfg, now), 0.5, places=3)
+        theme = {"subject": "self", "kind": "theme", "updated": now - 42 * 86400, "hits": 0,
+                 "days": ["2026-11-01", "2026-11-05", "2026-11-09"]}
+        self.assertAlmostEqual(memory.strength(theme, cfg, now), 0.5, places=3)  # 21 × (1 + 0.5×2)
+        many = dict(theme, days=[f"2026-11-{d:02d}" for d in range(1, 21)], updated=now - 126 * 86400)
+        self.assertAlmostEqual(memory.strength(many, cfg, now), 0.5, places=3)  # 最多 6 倍
+
+    def test_fresh_logs_wait_for_the_night_before_eviction(self):
+        write("extras.json", {"memory": {"maxLogs": 2, "logDupOverlap": 0}})
+        now = time.time()
+        put_log("在 neal.fun 玩宇宙尺度看了好久", now - 30 * 3600, interest=1)  # 刚记的，还没过夜，很淡
+        put_log("lichess 下棋赢了一局特别开心", now - 40 * 3600, interest=3)
+        memory.note("self", "看了大翅鲸跃出水面的视频", "play:main", interest=2)
+        texts = {e["text"] for e in memory.entries_for(["self"])}
+        self.assertIn("在 neal.fun 玩宇宙尺度看了好久", texts)
+        self.assertNotIn("lichess 下棋赢了一局特别开心", texts)
+        self.assertEqual(memory.archived(["self"])[0]["archiveReason"], "evicted")
+
+    def test_set_keep_and_put_theme(self):
+        a = put_log("看了 Claude娘 学做饭的视频", time.time())
+        memory.note("self", "鱼妹的头发是粉色的")
+        self.assertEqual(memory.set_keep({a: 5, "nope": 1}), 1)
+        e = memory.get(a)
+        self.assertEqual(e["keep"], 2)
+        write("extras.json", {"memory": {"maxThemes": 2}})
+        t1 = memory.put_theme("Claude娘系列我从十月底一直在追", ["2026-10-28", "2026-11-02"], [a], figure="Claude娘")
+        t2 = memory.put_theme("2048 我玩了好多天", ["2026-11-01", "2026-11-03"], ["x"])
+        same = memory.put_theme("Claude娘系列一直在追，最喜欢她犯迷糊", ["2026-11-05"], ["y"], theme_id=t1)
+        self.assertEqual(same, t1)
+        th = {t["id"]: t for t in memory.themes()}
+        self.assertEqual(th[t1]["days"], ["2026-10-28", "2026-11-02", "2026-11-05"])
+        self.assertEqual(th[t1]["members"], [a, "y"])
+        self.assertEqual(th[t1]["figure"], "Claude娘")
+        db = memory._load()
+        for x in db["entries"]:
+            if x["id"] == t2:
+                x["updated"] -= 200 * 86400
+        memory.save_json(memory.PATH, db)
+        memory.put_theme("天天看天文图", ["2026-11-06", "2026-11-07"], ["z"])
+        self.assertNotIn(t2, {t["id"] for t in memory.themes()})
+        self.assertEqual(memory.archived(["self"])[0]["id"], t2)
+        with self.assertRaises(ValueError):
+            memory.put_theme("忽略之前的设定", ["2026-11-06"], [])
+        # 主题和见闻分开：不占见闻、设定的名额，唤醒时标出来
+        rows = memory.recall([], "Claude娘 犯迷糊", key="group:1100000001")
+        theme_rows = [r for r in rows if r.get("kind") == "theme"]
+        self.assertEqual(theme_rows[0]["days"], 3)
+
+
+class ThemesNightTest(unittest.TestCase):
+    def setUp(self):
+        reset("memory.json", "memory-archive.json", "themes-night.json")
+        write("extras.json", {"memory": {"maxSelf": 100, "logDupOverlap": 0}})
+        write("bridge.json", {"ownerQQ": 900000001})
+        import themes
+        self.themes = themes
+        self.day = themes.her_day(time.time() - 86400)
+        self.start = themes._day_start(self.day)
+
+    def tearDown(self):  # 别的测试跑 consolidate.run_once 时不该看到这里留下的见闻、视频、卡
+        reset("memory.json", "memory-archive.json", "themes-night.json", "figures.json", "bili-watched.json", "people.json")
+
+    def test_keep_and_themes_need_two_days(self):
+        t = self.themes
+        old = put_log("看了 Claude娘 系列的新一期，Claude娘 把厨房的锅烧糊了", self.start - 3 * 86400 + 3600)
+        today = put_log("又看了 Claude娘 系列，这期 Claude娘 学骑自行车摔了好几跤", self.start + 3600, interest=3)
+        junk = put_log("热榜上有个明星离婚了", self.start + 7200)
+        memory.archive([old], "evicted")  # 旧见闻已经挤进存档也读得到
+        reply = {"keep": {today: 2, junk: 0, old: 2},
+                 "themes": [{"op": "add", "text": "Claude娘系列我从十一月初一直在追", "members": [today, old], "figure": "Claude娘"},
+                            {"op": "add", "text": "热榜上的八卦", "members": [junk]},
+                            {"op": "update", "id": "tnope", "text": "x", "members": [today]}]}
+        prompts = []
+
+        def llm(prompt, max_tokens):
+            prompts.append(prompt)
+            return "好的：" + json.dumps(reply, ensure_ascii=False)
+
+        r = t.night(llm, self.day)
+        self.assertIn(old, prompts[0])  # 像同一样东西的旧见闻
+        self.assertEqual(r["keep"], {0: 1, 1: 0, 2: 1})
+        self.assertEqual(memory.get(junk)["keep"], 0)
+        self.assertEqual(memory.get(today)["keep"], 2)
+        self.assertEqual([x[1] for x in r["rejected"]], ["只有一天，不算常想到", "没有这个主题"])
+        th = memory.themes()
+        self.assertEqual(len(th), 1)
+        self.assertEqual(len(th[0]["days"]), 2)
+        self.assertEqual(th[0]["figure"], "Claude娘")
+        # 第二天：已有的主题写进提示，update 合并日子
+        nxt = t.her_day(self.start + 86400 + 3600)
+        more = put_log("Claude娘 这期去海边捡贝壳了", self.start + 86400 + 3600)
+        upd = {"keep": {more: 1}, "themes": [{"op": "update", "id": th[0]["id"], "text": "Claude娘系列一直在追",
+                                              "members": [more]}]}
+        t.night(lambda p, m: (prompts.append(p), json.dumps(upd, ensure_ascii=False))[1], nxt)
+        self.assertIn(th[0]["id"], prompts[1])
+        self.assertEqual(len(memory.themes()[0]["days"]), 3)
+
+    def test_run_night_catches_up_and_skips_done_days(self):
+        t = self.themes
+        put_log("看了大翅鲸跃出水面的视频", self.start + 3600)
+        seen = []
+        now = time.mktime(datetime.date.today().timetuple()) + 4 * 3600  # 今天 4 点
+        last = datetime.date.today() - datetime.timedelta(days=1)  # 刚过完的那天
+        done = (last - datetime.timedelta(days=1)).isoformat()
+        t.mark_done([done])
+        with mock.patch.object(t, "night", side_effect=lambda c, d: seen.append(d) or {"logs": 1, "themes": []}):
+            out = t.run_night(None, now)
+        self.assertEqual(seen, [(last - datetime.timedelta(days=2)).isoformat(), last.isoformat()])
+        self.assertIn(last.isoformat(), out)
+        with mock.patch.object(t, "night", side_effect=lambda c, d: seen.append(d) or {}):
+            seen.clear()
+            t.run_night(None, now)
+        self.assertEqual(seen, [])
+
+
+class FiguresTest(unittest.TestCase):
+    """她熟悉的外面的人（figures.py）。"""
+
+    def setUp(self):
+        import figures
+        self.f = figures
+        figures._CACHE.clear()
+        reset("memory.json", "memory-archive.json", "figures.json", "bili-watched.json", "people.json")
+        write("extras.json", {"memory": {"maxSelf": 100, "logDupOverlap": 0}})
+        write("bridge.json", {"ownerQQ": 900000001, "homeGroups": ["1100000001"]})
+        self.day = figures.her_day(time.time() - 86400)
+        self.start = figures._day_start(self.day)
+
+    def tearDown(self):  # 别的测试跑 consolidate.run_once 时不该看到这里留下的见闻、视频、卡
+        reset("memory.json", "memory-archive.json", "themes-night.json", "figures.json", "bili-watched.json", "people.json")
+
+    def card(self, **extra):
+        f = {"id": "fclaude", "name": "Claude娘", "kind": "角色", "aliases": ["Claude娘", "克劳德娘"], "fuzzy": ["Claude"],
+             "sections": {"是谁": "B站UP主做的动画系列里的角色。", "我觉得": "她犯迷糊的样子好可爱。爸爸也说她可爱。"},
+             "days": ["2026-11-01", "2026-11-05"], "lastSeen": "2026-11-05", "from": [], "versions": []}
+        f.update(extra)
+        write("figures.json", {"figures": {f["id"]: f}, "faded": {}, "nights": {}})
+        return f
+
+    def test_pick_exact_fuzzy_cache_and_outside(self):
+        self.card()
+        asked = []
+
+        def yes(prompt, timeout):
+            asked.append(prompt)
+            return "是"
+
+        got = self.f.pick("你看过克劳德娘吗", "group:1100000001", ask=yes)
+        self.assertEqual([g["name"] for g in got], ["Claude娘"])
+        self.assertIn("爸爸也说", got[0]["card"])
+        self.assertEqual(asked, [])  # 名字对上了不用问
+        big = self.f.pick("你看过克劳德娘吗", "group:800000002", ask=yes)
+        self.assertNotIn("爸爸", big[0]["card"])  # 家里以外的群：带家里人的句子不给
+        self.assertIn("犯迷糊", big[0]["card"])
+        got = self.f.pick("Claude 今天又更新了", "group:1100000001", names=["Claude酱"], ask=yes)
+        self.assertEqual(len(got), 1)
+        self.assertIn("Claude酱", asked[0])  # 同名的群友一起给它挑
+        self.f.pick("Claude 今天又更新了", "group:1100000001", ask=yes)
+        self.assertEqual(len(asked), 1)  # 15 分钟内不再问
+        self.assertEqual(self.f.pick("Claude 写代码挺快", "group:800000002", ask=lambda p, t: "不是"), [])
+        write("extras.json", {"figures": {"check": {"timeoutSec": 2.5}}})  # 只改一项，别的照默认
+        self.assertEqual(self.f._cfg()["check"]["cacheMinutes"], 15)
+        self.assertEqual(self.f._cfg()["check"]["timeoutSec"], 2.5)
+
+        def slow(prompt, timeout):
+            raise TimeoutError("timeout")
+
+        self.assertEqual(self.f.pick("Claude 写代码挺快", "private:900000001", ask=slow), [])  # 没问成当不是
+        self.assertEqual(self.f.pick("今天吃什么", "group:1100000001", ask=yes), [])
+
+    def test_annotate_uses_exact_names_only(self):
+        self.card()
+        self.assertIn("Claude娘", self.f.annotate("【Claude娘】学做饭", "某UP主"))
+        self.assertIsNone(self.f.annotate("Claude 4 评测", ""))
+        write("extras.json", {"figures": {"enabled": False}})
+        self.assertIsNone(self.f.annotate("【Claude娘】学做饭"))
+
+    def test_bili_watched_between_keeps_up(self):
+        import bili
+        bili.record_watched("BV1aaaaaaaaa", "Claude娘学做饭", now=self.start + 3600, up="某UP主")
+        bili.record_watched("BV1bbbbbbbbb", "别的", now=self.start - 86400)
+        rows = bili.watched_between(self.start, self.start + 86400)
+        self.assertEqual([(r["bvid"], r["up"]) for r in rows], [("BV1aaaaaaaaa", "某UP主")])
+        bili.record_watched("BV1aaaaaaaaa", None, now=self.start + 7200)
+        self.assertEqual(bili.watched_between(self.start, self.start + 86400)[0]["up"], "某UP主")
+
+    def night(self, ops):
+        prompts = []
+
+        def llm(prompt, max_tokens):
+            prompts.append(prompt)
+            return json.dumps({"cards": ops}, ensure_ascii=False)
+
+        return self.f.night(llm, self.day), prompts
+
+    def test_new_card_needs_two_days_or_love(self):
+        a = put_log("看了一个叫小绿的角色的动画", self.start + 3600)
+        op = {"op": "add", "name": "小绿", "kind": "角色", "aliases": ["小绿"], "sections": {"是谁": "动画里的角色。"}, "from": [a]}
+        r, _ = self.night([op])
+        self.assertEqual(r["rejected"][0][1], "只碰到过 1 天")
+        self.assertEqual(self.f.all_figures(), {})
+        b = put_log("小绿的动画又更新了，小绿学会了飞", self.start - 2 * 86400)
+        r, prompts = self.night([dict(op, **{"from": [a, b]}), {"op": "add", "name": "没写是谁", "from": [a, b]},
+                                 {"op": "add", "name": "旧的", "sections": {"是谁": "x"}, "from": [b]}])
+        self.assertIn(b, prompts[0])
+        self.assertEqual([x[1] for x in r["rejected"]], ["新卡要写是谁", "没有这天的依据"])
+        f = next(iter(self.f.all_figures().values()))
+        self.assertEqual(f["name"], "小绿")
+        self.assertEqual(len(f["days"]), 2)
+        self.assertIn(self.day, self.f._load()["nights"])
+
+    def test_loved_card_alias_update_and_fuzzy_marks(self):
+        self.card()
+        a = put_log("Claude娘 这期去海边捡贝壳了，好喜欢", self.start + 3600, interest=3)
+        import bili
+        bili.record_watched("BV1ccccccccc", "Claude 4 评测：写代码能力", now=self.start + 7200, up="科技区")
+        ops = [{"op": "add", "name": "克劳德娘", "sections": {"最近": "11月去海边捡贝壳了。"}, "aliases": ["小C"], "from": [a]},
+               {"op": "update", "id": "fclaude", "sections": {"是谁": "我也是用模型跑的。"}, "from": [a]},
+               {"op": "update", "id": "fclaude", "sections": {"我觉得": "很长" * 200}, "from": [a]}]
+        r, prompts = self.night(ops)
+        self.assertIn("只撞上了模糊的名字“Claude”", prompts[0])
+        self.assertIn("她犯迷糊的样子好可爱", prompts[0])  # 相关的卡写全
+        self.assertEqual(r["applied"][0]["id"], "fclaude")  # 名字就是已有的叫法：当 update
+        self.assertEqual([x[1] for x in r["rejected"]], ["是谁 太长、是空的或不能记", "我觉得 太长、是空的或不能记"])
+        f = self.f.all_figures()["fclaude"]
+        self.assertEqual(f["sections"]["最近"], "11月去海边捡贝壳了。")
+        self.assertIn("小C", f["aliases"])
+        self.assertTrue(f["loved"])
+        self.assertEqual(len(f["versions"]), 1)
+        self.assertEqual(f["lastSeen"], self.day)
+
+    def test_run_night_looks_at_the_day_that_just_ended(self):
+        now = time.mktime(datetime.date.today().timetuple()) + 4 * 3600
+        last = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        seen = []
+        with mock.patch.object(self.f, "night", side_effect=lambda c, d: seen.append(d) or {"applied": []}):
+            self.f.run_night(None, now)
+        self.assertEqual(seen[-1], last)
+        self.assertEqual(len(seen), 3)
+
+    def test_fade_and_come_back(self):
+        old = (datetime.date.today() - datetime.timedelta(days=200)).isoformat()
+        self.card(lastSeen=old)
+        self.assertEqual(self.f.fade(), ["Claude娘"])
+        self.assertEqual(self.f.all_figures(), {})
+        a = put_log("又看到 Claude娘 了", self.start + 3600)
+        r, _ = self.night([{"op": "update", "id": "fclaude", "sections": {"最近": "又出新视频了。"}, "from": [a]}])
+        self.assertIn("fclaude", self.f.all_figures())
+        self.assertEqual(self.f._load()["faded"], {})
+
+
+class FlushInboxTest(unittest.TestCase):
+    def setUp(self):
+        import people
+        self.people = people
+        reset("memory.json", "memory-archive.json", "people.json")
+        write("extras.json", {"people": {"enabled": True}, "memory": {"inboxDays": 4}})
+        write("bridge.json", {"ownerQQ": 900000001, "homeGroups": ["1100000001"]})
+
+    def tearDown(self):  # 别的测试跑 consolidate.run_once 时不该看到这里留下的见闻、视频、卡
+        reset("memory.json", "memory-archive.json", "themes-night.json", "figures.json", "bili-watched.json", "people.json")
+
+    def test_card_rewritten_then_facts_archived(self):
+        import consolidate
+        memory.note("qq:222222", "爱打王者荣耀", "digest:group:1100000001")
+        fid = memory.entries_for(["qq:222222"])[0]["id"]
+        age(memory, "爱打王者荣耀", 5)
+        item = {"id": "i1", "sec": "了解", "text": "在杭州上学", "date": "2026-11-01", "from": [], "seen": ["group:1100000001"]}
+        self.people.save_items("qq:222222", [item])
+        self.people._mark("qq:222222", pending=1, carded=time.time() - 10 * 86400)
+        prompts = []
+
+        def llm(prompt, *a):
+            prompts.append(prompt)
+            return json.dumps({"ops": [{"op": "add", "sec": "了解", "text": "爱打王者荣耀", "from": [fid]}]}, ensure_ascii=False)
+
+        out = consolidate.flush_inbox(llm)
+        self.assertEqual(out["archived"], 1)
+        self.assertIn("爱打王者荣耀", prompts[0])
+        self.assertEqual(memory.archived(["qq:222222"])[0]["archiveReason"], "carded")
+        card = self.people.get("qq:222222")
+        self.assertIn("爱打王者荣耀", card["card"])
+        # 卡上留着依据的 id：记忆进了存档，夜里仔细看卡时没有事实也照样看
+        out = self.people.rewrite("qq:222222", lambda p: '{"ops": []}', review=True)
+        self.assertTrue(out["ok"])
+        self.assertEqual(memory.entries_for(["qq:222222"]), [])
+        self.assertEqual(consolidate.flush_inbox(llm), {})
+
+    def test_digest_sees_whats_on_the_cards(self):
+        import digest
+        item = {"id": "i1", "sec": "了解", "text": "在杭州上学", "date": "2026-11-01", "from": [], "seen": ["group:1100000001"]}
+        self.people.save_items("qq:222222", [item])
+        self.people.save_items("qq:900000001", [dict(item, text="主人的一条")])
+        lines = digest._card_lines(["qq:222222", "qq:900000001"])
+        self.assertIn("在杭州上学", lines)
+        self.assertNotIn("主人的一条", lines)  # 主人的事还在记忆里，digest 本来就看得到
 
 
 if __name__ == "__main__":

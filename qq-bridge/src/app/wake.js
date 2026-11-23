@@ -10,7 +10,7 @@ export function createWake(app) {
     wakeConfigMissCount, wakeConfigUpdatedKeys
   } = app;
   // 别的模块里的，等都装好了在 link() 里拿
-  let FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2, lazyInBedV2,
+  let FREE_TIME_REASONS, acknowledgeMessagesV2, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2, lazyInBedV2,
     messageMediaStore, nightSleepBlocksV2, playHoldV2, quietLeftV2, quietNeededV2, readThroughSeqV2,
     replyTimingCfgV2, saveSocialV2State, socialV2, startFreeTimeV2, whenV2;
 
@@ -19,7 +19,80 @@ export function createWake(app) {
   // 都失败才照旧通知主人。返回 true 表示已经安排了重试（调用方不再通知主人）。
   const malformedRetryCounts = new Map();
   function isMalformedTurnErrorV2(error) {
+    if (isRefusalTurnErrorV2(error)) return false;
     return error?.code === 'MALFORMED_RESPONSE' || /tool input is invalid JSON/i.test(String(error?.message ?? ''));
+  }
+
+  // qqbot_agent：DeepSeek 的内容审核掐断了她的输出（“unsupported stop reason refusal”，DSH 也报成 MALFORMED_RESPONSE）。
+  // 2026-11-19 17:08 1000000004 群有人问“这个表情是什么🇹🇼”，她每次一想复述那句就被掐，
+  // 按 JSON 写坏重试、收尾提醒、下一次唤醒（那条还在未读里）全都一样被掐，两分钟里 12 回，群里叫她也不回。
+  // 现在统一过滤掉再重试：这一轮开始前到的未读（她这一轮看到的新消息）在未读和最近消息里都换成“被过滤了”，
+  // 这一轮她什么都还没做的话从会话历史里剪掉（bridge.js 的 forkSessionV2，从这一轮开始前 fork），
+  // 再叫她一次（socialV2.refusalRetry.max，默认 1）；还被掐就把那几条记成看过、算这一轮收了尾。
+  // 返回 'retry'（安排了重试）、'gave-up'（重试过还不行）、'dropped'（不是唤醒的一轮，没重试）、false（不是拒答）。
+  const REFUSAL_FILTERED_TEXT = '[这条消息被过滤了，看不到原话]';
+  const refusalRetryCounts = new Map();
+  function isRefusalTurnErrorV2(error) {
+    return /stop reason refusal/i.test(String(error?.message ?? ''));
+  }
+  function filterRefusedMessagesV2(st, before) {
+    const seqs = new Set(st.unread.filter((m) => Number.isSafeInteger(m.seq) && Number(m.time) <= before).map((m) => m.seq));
+    for (const list of [st.unread, st.recentMessages]) {
+      for (const m of list || []) {
+        if (!seqs.has(m?.seq) || m.isSelf || m.filtered) continue;
+        Object.assign(m, { text: REFUSAL_FILTERED_TEXT, plain: REFUSAL_FILTERED_TEXT, tail: REFUSAL_FILTERED_TEXT,
+          media: [], hasMedia: false, forwardIds: [], hasForward: false, filtered: true });
+      }
+    }
+    return seqs;
+  }
+  async function handleRefusedTurnV2(key, reason, turnStartedAt, cut) {
+    if (reason?.kind !== 'error' || !isRefusalTurnErrorV2(reason.error)) {
+      refusalRetryCounts.delete(key);
+      return false;
+    }
+    malformedRetryCounts.delete(key);
+    const st = getSocialV2State(key);
+    const before = Number(turnStartedAt) > 0 ? Number(turnStartedAt) : Date.now();
+    const seqs = filterRefusedMessagesV2(st, before);
+    let cutDone = false;
+    if (cut && !cut.output && Number.isSafeInteger(cut.base)) {
+      try { cutDone = !!(await app.forkSessionV2(key, cut.base)); }
+      catch (error) { log(`[拒答] ${key} 把这一轮从历史里剪掉没成：${error?.message ?? error}`); }
+    }
+    const rc = cfg.socialV2?.refusalRetry ?? {};
+    const max = Math.max(0, Number(rc.max ?? 1) || 0);
+    const n = (refusalRetryCounts.get(key) ?? 0) + 1;
+    const wake = pendingWakeKeys.has(key);
+    const what = `过滤了 ${seqs.size} 条消息，${cutDone ? '这一轮从历史里剪掉了' : cut?.output ? '这一轮她已经做了事，没剪' : '没剪历史'}`;
+    if (wake && rc.enabled !== false && !socialV2.paused && n <= max) {
+      refusalRetryCounts.set(key, n);
+      saveSocialV2State();
+      log(`[拒答] ${key} 这一轮被内容审核掐断，${what}，重试 (${n}/${max})`);
+      appendActivity(`${key} 被内容审核掐断，过滤 ${seqs.size} 条后重试 ${n}/${max}`);
+      const note = seqs.size
+        ? `【系统】有 ${seqs.size} 条消息的原话看不到了，下面写成“${REFUSAL_FILTERED_TEXT}”。别猜它说了什么、别复述、也别追问；只有它的话就当没看到，有别的照常回。`
+        : '';
+      deliverPrompt(key, '', { wakeReason: st.lastWakeReason || 'message', wakeNote: note }).then((result) => {
+        if (result && result.ok === false) {
+          pendingWakeKeys.delete(key);
+          disarmPendingWakeLease(key);
+        }
+      }).catch((error) => {
+        pendingWakeKeys.delete(key);
+        disarmPendingWakeLease(key);
+        log(`[拒答] ${key} 重试投递失败: ${error?.message ?? error}`);
+      });
+      return 'retry';
+    }
+    refusalRetryCounts.delete(key);
+    const shown = [...seqs];
+    const acked = shown.length ? acknowledgeMessagesV2(st, Math.max(...shown)) : 0;
+    if (wake) markReadCalledKeys.add(key);
+    saveSocialV2State();
+    log(`[拒答] ${key} 这一轮被内容审核掐断，${what}，${wake ? '重试过了还不行' : '不是唤醒的一轮、不重试'}，${acked} 条未读记成看过`);
+    appendActivity(`${key} 被内容审核掐断，跳过 ${acked} 条未读`);
+    return wake ? 'gave-up' : 'dropped';
   }
   function retryMalformedTurnV2(key, reason) {
     if (reason?.kind !== 'error' || !isMalformedTurnErrorV2(reason.error)) {
@@ -37,7 +110,10 @@ export function createWake(app) {
     }
     malformedRetryCounts.set(key, n);
     const st = getSocialV2State(key);
-    const prompt = `【系统】刚才你调用工具时参数 JSON 没写完整（可能太长被截断了），这一步被中断了，没有执行。接着刚才的事继续做就行；工具参数要写成完整合法的 JSON，内容很长就拆成几次。（会话 ${key}，令牌 ${st.agentToken}）`;
+    // 2026-11-23 1100000003 群她连着 9 次把话写成 {"messages": 在玩2048呀}（文字没加引号），
+    // 以前这里只说“没写完整、可能太长被截断”，她照样再写一遍。DSH 现在会自己补引号（control/patch-dsh-tool-json-bare-string.mjs），
+    // 剩下的多半是真被截断或别的写法问题，所以两种都说清楚。
+    const prompt = `【系统】刚才你调用工具时参数不是合法的 JSON，这一步被中断了，没有执行。最常见的是两种：文字没加双引号（要写成 {"messages": "在玩呀"}，不能写成 {"messages": 在玩呀}），或者内容太长被截断了（拆成几次发）。照这个改好，接着刚才的事继续做就行。（会话 ${key}，令牌 ${st.agentToken}）`;
     log(`[reserved2] ${key} 工具参数 JSON 出错，自动重试 (${n}/${max})`);
     appendActivity(`${key} 工具参数 JSON 出错，自动重试 ${n}/${max}`);
     deliverPrompt(key, prompt).then((result) => {
@@ -501,6 +577,8 @@ export function createWake(app) {
       isTimerWakeReason,
       replayPendingWakeReasonsV2,
       retryMalformedTurnV2,
+      handleRefusedTurnV2,
+      isRefusalTurnErrorV2,
       runGlobalProactiveCheckV2,
       scheduleProactiveCheckV2,
       scheduleWakeV2,
@@ -510,7 +588,7 @@ export function createWake(app) {
     },
     link() {
       ({
-        FREE_TIME_REASONS, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2, lazyInBedV2,
+        FREE_TIME_REASONS, acknowledgeMessagesV2, buildWakePromptV2, dueRemindersV2, getSocialV2State, isNightSleepV2, lazyInBedV2,
         messageMediaStore, nightSleepBlocksV2, playHoldV2, quietLeftV2, quietNeededV2, readThroughSeqV2,
         replyTimingCfgV2, saveSocialV2State, socialV2, startFreeTimeV2, whenV2
       } = app);

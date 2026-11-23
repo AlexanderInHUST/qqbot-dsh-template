@@ -167,7 +167,7 @@ await test('发失败：错误里写清没发出去、照实说', () => fixture(
   ? { status: 'failed', retcode: 1200, message: 'send group message failed: 网络连接异常!' }
   : { status: 'ok', retcode: 0, data: { message_id: 9001 } }) }) }));
 
-await test('noReachOut：爸爸私聊她照回，但她不主动去找——不替别处发过去、自由时间不分享（托的照发）、不主动找人、系统提示发在小群', () => {
+await test('noReachOut：爸爸私聊她照回，但她不主动去找——不替别处发过去、自由时间不分享（托的照发）、不主动找人、系统提示私聊他', () => {
   const asked = [];
   const fetch = async (url) => {
     if (/extras:8940\/proactive/.test(String(url))) asked.push(String(url));
@@ -179,7 +179,7 @@ await test('noReachOut：爸爸私聊她照回，但她不主动去找——不�
     assert.equal(r.status, 403);
     assert.match(r.data.error, /不主动去找.*家里的小群/);
     assert.equal(sends('send_private_msg').length, 0);
-    assert.equal(h.ownerNoticeKey(), HOME, '系统提示发在小群');
+    assert.equal(h.ownerNoticeKey(), PRIV, '系统提示照样私聊他（主人 11-19 说的）');
     assert.match(String(h.playShareGateV2(PRIV, false) ?? ''), /不主动来找/);
     h.getSocialV2State(PLAY).playRequests = [{ from: PRIV, at: Date.now(), note: '帮我看看' }];
     assert.equal(h.playShareGateV2(PRIV, false), null, '他托的照发');

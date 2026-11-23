@@ -301,8 +301,11 @@ def day_evidence(day: str) -> list[dict]:
     out = []
     with LOCK:
         entries = list(memory._load()["entries"])
+    have = {e["id"] for e in entries}
+    # 淡掉、挤掉、进了人物卡的原文在存档里（memory-archive.json），回看那天时照样算
+    entries += [e for e in memory.archived(since=start, until=end) if e["id"] not in have]
     for e in entries:
-        if e["subject"] == memory.RULES or e.get("kind") == "file" or not (start <= e.get("created", 0) < end):
+        if e["subject"] == memory.RULES or e.get("kind") in ("file", "theme") or not (start <= e.get("created", 0) < end):
             continue
         places = list(e["seen"]) if e.get("seen") else [_place(e.get("source"))]
         about = "她自己" if e["subject"] == "self" else e["subject"]

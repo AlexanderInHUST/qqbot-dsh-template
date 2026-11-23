@@ -222,12 +222,14 @@ def watched_before(bvid: str, now: float | None = None) -> dict | None:
     return seen
 
 
-def record_watched(bvid: str, title: str | None, now: float | None = None) -> None:
+def record_watched(bvid: str, title: str | None, now: float | None = None, up: str | None = None) -> None:
     path = store.state_path(WATCHED_FILE)
     with store.LOCK:
         db = store.load_json(path, {})
         old = db.pop(bvid, {})  # re-insert so the dict stays oldest-first
         db[bvid] = {"title": str(title or old.get("title") or "")[:80], "at": now or time.time(), "n": int(old.get("n") or 0) + 1}
+        if up or old.get("up"):
+            db[bvid]["up"] = str(up or old.get("up"))[:40]
         for k in list(db)[:-WATCHED_KEEP]:
             del db[k]
         store.save_json(path, db)
@@ -240,6 +242,16 @@ def recent_watched(limit: int = 20) -> list[dict]:
         db = store.load_json(store.state_path(WATCHED_FILE), {})
     items = sorted(db.items(), key=lambda kv: float(kv[1].get("at") or 0))[-limit:] if limit else []
     return [{"bvid": k, "title": str(v.get("title") or ""), "at": float(v.get("at") or 0)} for k, v in items]
+
+
+def watched_between(since: float, until: float) -> list[dict]:
+    """Videos last watched in [since, until), oldest first (figures.py builds cards from them at night).
+    A rewatch moves the time, so the earlier watch of the same video drops out of its old day."""
+    with store.LOCK:
+        db = store.load_json(store.state_path(WATCHED_FILE), {})
+    out = [{"bvid": k, "title": str(v.get("title") or ""), "up": str(v.get("up") or ""), "at": float(v.get("at") or 0)}
+           for k, v in db.items() if since <= float(v.get("at") or 0) < until]
+    return sorted(out, key=lambda v: v["at"])
 
 
 def rewatch_refusal(bvid: str, seen: dict) -> str:
@@ -304,9 +316,16 @@ async def watch(video: str, again: bool = False) -> list:
         "loggedIn": bool(info.get("isLogin")),
         "note": f"已经拖着进度条看了 {len(shots)} 个片段（大约每 {round(gap)} 秒一段）。下面那张图是这些片段拼成的缩略图，左上角的编号和时间对应下面的字幕和弹幕。视频已暂停，不会自动连播，看完就可以换下一个。",
     }
+    try:  # 她熟悉的角色、UP 主（figures.py）
+        import figures
+        known = figures.annotate(info.get("title"), info.get("owner"), (info.get("desc") or "")[:200])
+    except Exception:  # noqa: BLE001 - never stops the watch
+        known = None
+    if known:
+        summary["youKnow"] = known
     timeline = "\n".join(f"{i + 1}. " + _around(t, subs, danmaku, before=gap / 2, after=gap / 2) for i, t in enumerate(shots))
     if shots:
-        record_watched(bvid, info.get("title"))
+        record_watched(bvid, info.get("title"), up=info.get("owner"))
     out: list = [json.dumps(summary, ensure_ascii=False, indent=1), timeline or "（没能拖动进度条）"]
     if image is not None:
         out.append(image)

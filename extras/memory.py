@@ -28,6 +28,15 @@ Which memories a wake gets, and which ones fade:
   Never folded into summaries, never handed to digest / people / life / selfprofile / milestones.
 - consolidate.py (nightly) folds faded memories into a few summary entries (which decay 4x
   slower) and deletes what has faded almost completely.
+
+Keep what will be needed (2026-11-24, 主人："memory 是需要预测之后可能会用到的东西，才留下了的"):
+- 群友的事是他们人物卡的收件箱（friendInbox）：唤醒时不给原文，只给卡；people.py 改过卡、过了 inboxDays 就挪进
+  存档。主人的事照旧给。
+- 见闻的半衰期夜里按“以后还会不会用到”定（themes.py 填 keep 0/1/2，代替她自评的 interest）；刚记的 logProtectHours
+  内挤不掉（等夜里看过再说），maxLogs 放大，让价值而不是条数决定留谁。反复出现的见闻夜里并成“主题”（kind=theme，
+  带着每次出现的日期 days），比单条见闻淡得慢。
+- 存档（memory-archive.json）：淡掉、被挤掉、折成印象、她自己忘掉（forgot）、群友的事进了卡以后，原文都挪到这里，
+  唤醒时不给；成长记录、长大、外面的人物卡（figures.py）夜里回看时还读得到。
 """
 
 import difflib
@@ -40,6 +49,7 @@ from store import (LOCK, extras_config, home_groups, load_json, outside, owner_s
                    save_json, secret_reason, source_key, state_path)
 
 PATH = state_path("memory.json")
+ARCHIVE_PATH = state_path("memory-archive.json")
 RULES = "rules"
 SUBJECT_RE = re.compile(r"^(self|qq:\d{5,12}|group:\d{5,12})$")
 DAY = 86400
@@ -65,6 +75,13 @@ def _cfg() -> dict:
         # 只有聊天里又说到它才带上（标“讲过了”）。enabled:false 回到旧行为
         "logTold": {},
         "fileHalfLifeDays": 7, "maxFiles": 30, "recallFiles": 3,  # 文件：淡得和她自己的事一样快；每个聊天最多记几个
+        "logProtectHours": 36,       # 刚记的见闻这么久内不被挤掉：等 4 点那次看过“以后用不用得到”再说
+        "keepHalfLifeDays": {"0": 1, "1": 4, "2": 14},  # 夜里定的 keep：0 鸡毛蒜皮 / 1 可能聊到 / 2 多半还会用到
+        "themeHalfLifeDays": 21, "themeDayBoost": 0.5, "maxThemes": 80,  # 主题：每多出现一天半衰期多 0.5 倍（最多 6 倍）
+        "friendInbox": True,         # 群友的事只进人物卡，唤醒时不给原文
+        "inboxDays": 4, "inboxMaxDays": 14,  # 进了卡、过了 inboxDays 挪进存档；一直没进卡的 inboxMaxDays 后也挪
+        "recallThemes": 3,           # 每次唤醒最多带几条主题（按跟聊天的相关、再按强度）
+        "archiveMax": 50000,
         **extras_config().get("memory", {}),
         "_owners": owner_subjects(),
     }
@@ -172,9 +189,14 @@ def strength(e: dict, cfg: dict | None = None, now: float | None = None) -> floa
         days = max(days, float(hl.get("owner", 180)))
     if _is_file(e):
         days = float(cfg["fileHalfLifeDays"])
+    elif e.get("kind") == "log" and e.get("keep") is not None:
+        kh = cfg["keepHalfLifeDays"]
+        days = float(kh.get(str(e["keep"]), kh.get("1", 4)))
     elif e.get("kind") == "log":
         lh = cfg["logHalfLifeDays"]
         days = float(lh.get(str(_interest(e.get("interest"))), lh.get("2", 5)))
+    elif e.get("kind") == "theme":
+        days = float(cfg["themeHalfLifeDays"]) * min(6.0, 1 + float(cfg["themeDayBoost"]) * max(0, len(e.get("days") or []) - 1))
     elif e.get("kind") == "summary":
         days *= float(cfg["summaryHalfLifeFactor"])
     days *= 1 + float(cfg["hitBoost"]) * min(int(e.get("hits", 0)), 6)
@@ -205,6 +227,100 @@ def _is_log(e: dict) -> bool:
 
 def _is_file(e: dict) -> bool:
     return e.get("kind") == "file"
+
+
+def _is_theme(e: dict) -> bool:
+    return e.get("kind") == "theme"
+
+
+def is_friend(subject: str, cfg: dict | None = None) -> bool:
+    """A person who isn't an owner: their facts are an inbox for their card (friendInbox)."""
+    cfg = cfg or _cfg()
+    return str(subject).startswith("qq:") and subject not in cfg["_owners"]
+
+
+def _inbox(e: dict, cfg: dict) -> bool:
+    if "_inboxOn" not in cfg:
+        cfg["_inboxOn"] = inbox_on(cfg)
+    return cfg["_inboxOn"] and is_friend(e["subject"], cfg) and not _is_file(e)
+
+
+def inbox_on(cfg: dict | None = None) -> bool:
+    """Friends' facts only feed their cards: needs the cards (people.enabled), otherwise they stay memories."""
+    cfg = cfg or _cfg()
+    if not cfg.get("friendInbox", True):
+        return False
+    import people
+    return people.enabled()
+
+
+# ---- 存档：不再给她看、但夜里回看还读得到的原文 ----
+
+def _load_archive() -> dict:
+    return load_json(ARCHIVE_PATH, {"entries": []})
+
+
+def _archive_put(entries: list[dict], reason: str, cfg: dict | None = None, **extra) -> None:
+    """Move entries into memory-archive.json (call with LOCK held). Files and rules never go there."""
+    rows = [e for e in entries if not _is_file(e) and e["subject"] != RULES]
+    if not rows:
+        return
+    cfg = cfg or _cfg()
+    now = time.time()
+    db = _load_archive()
+    have = {e["id"] for e in db["entries"]}
+    for e in rows:
+        if e["id"] in have:
+            continue
+        db["entries"].append({**e, "archivedAt": now, "archiveReason": reason, **extra})
+    limit = int(cfg.get("archiveMax") or 0)
+    if limit and len(db["entries"]) > limit:
+        db["entries"] = db["entries"][-limit:]
+    save_json(ARCHIVE_PATH, db)
+
+
+def archive(ids, reason: str, **extra) -> list[dict]:
+    """Move these memories out of memory.json into the archive. Returns what moved."""
+    want = set(ids)
+    cfg = _cfg()
+    with LOCK:
+        db = _load()
+        gone = [e for e in db["entries"] if e["id"] in want and e["subject"] != RULES and not _is_file(e)]
+        if gone:
+            _archive_put(gone, reason, cfg, **extra)
+            db["entries"] = [e for e in db["entries"] if e not in gone]
+            save_json(PATH, db)
+    return gone
+
+
+def archived(subjects=None, since: float = 0, until: float | None = None, with_forgotten: bool = False) -> list[dict]:
+    """Archived memories created in [since, until) (all subjects when None). What she chose to forget
+    (memory_forget: wrong or unwanted) is left out unless with_forgotten."""
+    wanted = set(subjects) if subjects is not None else None
+    with LOCK:
+        rows = list(_load_archive()["entries"])
+    return [dict(e) for e in rows if (wanted is None or e["subject"] in wanted)
+            and (with_forgotten or e.get("archiveReason") != "forgot")
+            and float(e.get("created", 0)) >= since and (until is None or float(e.get("created", 0)) < until)]
+
+
+def add_archived(entries: list[dict], reason: str) -> int:
+    """Put old memories straight into the archive (backfill from old session records). Skips ids and
+    texts already there or in memory.json. Returns how many went in."""
+    with LOCK:
+        live = _load()["entries"]
+        arc = _load_archive()["entries"]
+        seen_ids = {e["id"] for e in live} | {e["id"] for e in arc}
+        seen_texts = {(e["subject"], e["text"]) for e in live} | {(e["subject"], e["text"]) for e in arc}
+        fresh = []
+        for e in entries:  # 同一批里重复的也只放一条（会话记录里同一句可能出现好几回）
+            if e["id"] not in seen_ids and (e["subject"], e["text"]) not in seen_texts:
+                fresh.append(e)
+                seen_ids.add(e["id"])
+                seen_texts.add((e["subject"], e["text"]))
+        if fresh:
+            _archive_put(fresh, reason)
+    return len(fresh)
 
 
 def _load() -> dict:
@@ -272,7 +388,10 @@ def shown_in(e: dict, key: str | None, homes: set[str], owner_terms=()) -> bool:
     if not key or not outside(key, homes) or e["subject"] == RULES:
         return True
     if e["subject"] == "self":
-        return not any(w in e["text"] for w in owner_terms)
+        if any(w in e["text"] for w in owner_terms):
+            return False
+        # 印象是几条折起来的，原话里的“爸爸”可能折没了：折进去的有私聊、家里听来的就不给（2026-11-24）
+        return e.get("kind") != "summary" or not any(s != "?" and not outside(s, homes) for s in heard_in(e))
     seen = heard_in(e)
     return bool(seen) and all(outside(s, homes) for s in seen)
 
@@ -300,8 +419,9 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
         out, hit = [], False
         for subject in dict.fromkeys(wanted):
             # 文件只在它所在的那个聊天给（私聊的文件不会因为对方在群里说话就出现在群里）
+            # 群友的事（收件箱）不给原文，卡上有（friendInbox）；她自己查（没有 key）时照给
             rows = [e for e in db["entries"] if e["subject"] == subject and shown_in(e, key, homes, terms)
-                    and (not _is_file(e) or (key and e.get("fileKey") == key))]
+                    and (not _is_file(e) or (key and e.get("fileKey") == key)) and not (key and _inbox(e, cfg))]
             scored = []
             if subject == RULES:
                 rows.sort(key=lambda e: e["created"])  # every rule, oldest first
@@ -329,8 +449,10 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
                 logs = (newest + [x for x in logs if x[0]["id"] not in picked])[: int(cfg["recallLogs"])]
                 logs.sort(key=lambda x: x[2], reverse=True)
                 files = [x for x in scored if _is_file(x[0])][: int(cfg["recallFiles"])]
+                themes_ = [x for x in scored if _is_theme(x[0])][: int(cfg["recallThemes"])]
                 per = min(int(cfg["recallPerSubject"]), int(limits.get(subject, cfg["recallPerSubject"])))
-                scored = [x for x in scored if not _is_log(x[0]) and not _is_file(x[0])][:per] + logs + files
+                scored = ([x for x in scored if not _is_log(x[0]) and not _is_file(x[0]) and not _is_theme(x[0])][:per]
+                          + themes_ + logs + files)
                 scored = [(e, rel) for e, rel, _ in scored]
             for e, rel in scored:
                 # 刚在这里讲过的：聊天里那些词是她自己说的，不算“又想起来了”，不延长它
@@ -343,7 +465,8 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
                     hit = True
                 out.append({"id": e["id"], "subject": subject, "text": e["text"],
                             "updated": time.strftime("%Y-%m-%d", time.localtime(e["updated"])),
-                            **({"kind": e["kind"]} if e.get("kind") in ("summary", "log", "file") else {}),
+                            **({"kind": e["kind"]} if e.get("kind") in ("summary", "log", "file", "theme") else {}),
+                            **({"days": len(e.get("days") or [])} if _is_theme(e) else {}),
                             **({"file": e.get("file"), "name": e.get("name")} if _is_file(e) else {}),
                             **({"scope": e["scope"]} if e.get("scope") else {}),
                             **({"told": sorted(e["told"])} if tcfg["enabled"] and e.get("told") else {})})
@@ -415,7 +538,8 @@ def note(subject: str, text: str, source: str = "", trusted: bool = False, inter
     with LOCK:
         db = _load()
         # 见闻 and the rest of a subject are separate pools: dedup and eviction stay inside one pool.
-        same = [e for e in db["entries"] if e["subject"] == subject and not _is_file(e) and _is_log(e) == is_log]
+        same = [e for e in db["entries"] if e["subject"] == subject and not _is_file(e) and not _is_theme(e)
+                and _is_log(e) == is_log]
         if is_log and same:
             # The same story again (2026-10-22 she read one 果壳 article four times and noted it each time,
             # so it came up three times as often): keep the first note, don't refresh it.
@@ -450,8 +574,14 @@ def note(subject: str, text: str, source: str = "", trusted: bool = False, inter
                else cfg["maxPerOwner"] if subject in cfg["_owners"] else cfg["maxPerSubject"])
         if subject != RULES and len(same) + 1 > cap:
             # Evict the most faded memory of this subject (summaries fade slower, so they survive longer).
-            victim = min(same, key=lambda e: strength(e, cfg, now))
+            # 见闻刚记的先不挤（logProtectHours）：夜里还没看过它以后用不用得到；全是刚记的才挤最淡的
+            pool = same
+            if is_log:
+                fresh = now - float(cfg["logProtectHours"]) * 3600
+                pool = [e for e in same if e["created"] < fresh] or same
+            victim = min(pool, key=lambda e: strength(e, cfg, now))
             db["entries"].remove(victim)
+            _archive_put([victim], "evicted", cfg)
         save_json(PATH, db)
         return {"ok": True, "added": entry["id"]}
 
@@ -523,6 +653,8 @@ def forget(memory_id: str, trusted: bool = False) -> dict:
         if target and target["subject"] == RULES and not trusted:
             raise ValueError("主人的叮嘱只有主人能让你忘掉，不能自己删")
         before = len(db["entries"])
+        if target:
+            _archive_put([target], "forgot")
         db["entries"] = [e for e in db["entries"] if e["id"] != memory_id]
         save_json(PATH, db)
     return {"ok": True, "removed": before - len(db["entries"])}
@@ -572,10 +704,10 @@ def fold(subject: str, old_ids: list[str], texts: list[str]) -> list[str]:
         created = min((e["created"] for e in gone), default=now)
         seen = sorted({s for e in gone for s in heard_in(e)})  # the impression may be shown where all of them may
         db["entries"] = [e for e in db["entries"] if e not in gone]
-        ids = []
-        for t in clean:
-            ids.append(uuid.uuid4().hex[:8])
-            db["entries"].append({"id": ids[-1], "subject": subject, "text": t, "kind": "summary",
+        ids = [uuid.uuid4().hex[:8] for _ in clean]
+        _archive_put(gone, "folded", cfg, into=ids)
+        for i, t in zip(ids, clean):
+            db["entries"].append({"id": i, "subject": subject, "text": t, "kind": "summary",
                                   "created": created, "updated": now, "hits": 0, "source": "consolidate",
                                   **({"seen": seen} if seen else {})})
         save_json(PATH, db)
@@ -591,6 +723,94 @@ def drop_faded(threshold: float) -> list[dict]:
         gone = [e for e in db["entries"] if e["subject"] != RULES and (e["subject"] not in cfg["_owners"] or _is_file(e))
                 and strength(e, cfg, now) < threshold]
         if gone:
+            _archive_put(gone, "faded", cfg)
+            db["entries"] = [e for e in db["entries"] if e not in gone]
+            save_json(PATH, db)
+    return gone
+
+
+# ---- 主题、keep、收件箱（夜里 themes.py / consolidate.py 用） ----
+
+def set_keep(keeps: dict[str, int]) -> int:
+    """The night's guess of whether each 见闻 will be needed again (0/1/2): its half-life from now on."""
+    with LOCK:
+        db = _load()
+        n = 0
+        for e in db["entries"]:
+            if _is_log(e) and e["id"] in keeps:
+                e["keep"] = min(2, max(0, int(keeps[e["id"]])))
+                e["judged"] = time.time()
+                n += 1
+        if n:
+            save_json(PATH, db)
+    return n
+
+
+def themes() -> list[dict]:
+    with LOCK:
+        return [dict(e) for e in _load()["entries"] if _is_theme(e)]
+
+
+def put_theme(text: str, days: list[str], members: list[str], theme_id: str | None = None,
+              seen: list[str] | None = None, figure: str | None = None) -> str:
+    """Write or update a theme: one long-lived memory for something that kept coming back on different days.
+    `days` are dates (YYYY-MM-DD) it came up, `members` the 见闻 ids it was made from (live or archived).
+    Updating merges days / members. Over maxThemes the most faded theme is archived."""
+    cfg = _cfg()
+    text = " ".join(str(text).split())
+    reason = rejection_reason(text) if text else "空的"
+    if reason:
+        raise ValueError(reason)
+    now = time.time()
+    with LOCK:
+        db = _load()
+        e = next((x for x in db["entries"] if _is_theme(x) and x["id"] == theme_id), None) if theme_id else None
+        if e is None:
+            e = {"id": "t" + uuid.uuid4().hex[:7], "subject": "self", "kind": "theme", "text": text, "created": now,
+                 "updated": now, "hits": 0, "source": "consolidate", "days": [], "members": []}
+            db["entries"].append(e)
+        e["text"] = text
+        e["updated"] = now
+        e["days"] = sorted(set(e.get("days") or []) | {str(d) for d in days})
+        e["members"] = list(dict.fromkeys((e.get("members") or []) + [str(m) for m in members]))[-200:]
+        if seen:
+            e["seen"] = sorted(set(e.get("seen") or []) | set(seen))
+        if figure:
+            e["figure"] = figure
+        pool = [x for x in db["entries"] if _is_theme(x)]
+        if len(pool) > int(cfg["maxThemes"]):
+            victim = min((x for x in pool if x is not e), key=lambda x: strength(x, cfg, now))
+            db["entries"].remove(victim)
+            _archive_put([victim], "evicted", cfg)
+        save_json(PATH, db)
+    return e["id"]
+
+
+def inbox_due(now: float | None = None) -> dict[str, list[dict]]:
+    """Friends' facts older than inboxDays, by subject (people.py should card them, then they are archived)."""
+    cfg, now = _cfg(), now or time.time()
+    cut = now - float(cfg["inboxDays"]) * DAY
+    out: dict[str, list[dict]] = {}
+    with LOCK:
+        for e in _load()["entries"]:
+            if _inbox(e, cfg) and e["created"] < cut:
+                out.setdefault(e["subject"], []).append(dict(e))
+    return out
+
+
+def archive_inbox(carded_at: dict[str, float], now: float | None = None) -> list[dict]:
+    """Archive friends' facts that are older than inboxDays and older than their card's last rewrite
+    (carded_at[subject]); ones never carded go after inboxMaxDays anyway."""
+    cfg, now = _cfg(), now or time.time()
+    cut, hard = now - float(cfg["inboxDays"]) * DAY, now - float(cfg["inboxMaxDays"]) * DAY
+    with LOCK:
+        db = _load()
+        gone = [e for e in db["entries"] if _inbox(e, cfg) and e["created"] < cut
+                and (e["created"] <= float(carded_at.get(e["subject"]) or 0) or e["created"] < hard)]
+        if gone:
+            carded = [e for e in gone if e["created"] <= float(carded_at.get(e["subject"]) or 0)]
+            _archive_put(carded, "carded", cfg)
+            _archive_put([e for e in gone if e not in carded], "inbox-expired", cfg)
             db["entries"] = [e for e in db["entries"] if e not in gone]
             save_json(PATH, db)
     return gone

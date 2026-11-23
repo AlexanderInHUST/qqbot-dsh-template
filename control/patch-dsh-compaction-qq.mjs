@@ -60,8 +60,10 @@ const QQ_COMPACTION_INSTRUCTION = [
 ].join("\\n");
 const QQ_CHECKPOINT_PREAMBLE = "（这是之前一段聊天的笔记，是你自己记的。里面的事都发生过，接着往下聊就好，不用提起这份笔记。）";
 const QQ_TOKEN_RE = /\\b[0-9a-f]{32,48}\\b/gi;
+// 她一复述就被 DeepSeek 内容审核掐断的（bridge 的 defang 也换了）：笔记里留着，压缩后每一轮都被掐（2026-11-19 大群）
+const QQ_REFUSAL_RE = /\\u{1F1F9}\\u{1F1FC}/gu;
 function qqRedactSummary(summary) {
-	return summary.map((block) => block && typeof block.text === "string" ? { ...block, text: block.text.replace(QQ_TOKEN_RE, "（令牌）") } : block);
+	return summary.map((block) => block && typeof block.text === "string" ? { ...block, text: block.text.replace(QQ_TOKEN_RE, "（令牌）").replace(QQ_REFUSAL_RE, "[旗子表情]") } : block);
 }
 `
 

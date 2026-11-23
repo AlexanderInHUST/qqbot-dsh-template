@@ -14,6 +14,7 @@ import bili
 import consolidate
 import digest
 import feedback
+import figures
 import life
 import memory
 import milestones
@@ -134,6 +135,10 @@ async def recall_http(request):
         subjects = [str(s) for s in body.get("subjects", [])][:20]
         query = str(body.get("query") or "")[:4000]
         key = str(body.get("key") or "") or None  # rules scoped to other conversations are left out
+        names = [" ".join(str(n).split())[:30] for n in body.get("names") or []][:60]
+        # 她熟悉的外面的人（figures.py）：模糊的名字要问一次模型（最多几秒），跟下面的同时做
+        import asyncio
+        figs = asyncio.get_running_loop().run_in_executor(None, figures.pick, query, key, names)
         cards = []
         if people.enabled():
             # people: who just spoke, newest first; cards also come for anyone mentioned by name in the query
@@ -148,7 +153,12 @@ async def recall_http(request):
         except Exception as error:  # noqa: BLE001 - a nicety, never blocks the memories
             print(f"[成长记录] recall 出错：{error}", flush=True)
             moments = []
-        return JSONResponse({"ok": True, "entries": entries, "cards": cards, "milestones": moments})
+        try:
+            familiar = await figs
+        except Exception as error:  # noqa: BLE001 - same: never blocks the memories
+            print(f"[熟悉的] pick 出错：{error}", flush=True)
+            familiar = []
+        return JSONResponse({"ok": True, "entries": entries, "cards": cards, "milestones": moments, "figures": familiar})
     except Exception as error:  # noqa: BLE001 - report to the bridge, it falls back to no memory
         return JSONResponse({"ok": False, "error": str(error)}, status_code=400)
 
@@ -204,6 +214,13 @@ async def people_http(request):
     """看人物卡（运维用，docker compose exec extras curl ...）。只在 agent-net 内可达。"""
     from starlette.responses import JSONResponse
     return JSONResponse({"ok": True, "enabled": people.enabled(), "people": people.all_people()})
+
+
+@mcp.custom_route("/figures", methods=["GET"])
+async def figures_http(request):
+    """看她熟悉的外面的人（figures.py；运维用，bridge 控制台的 /api/figures 转到这里）。"""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"ok": True, "enabled": figures.enabled(), **figures.view()})
 
 
 @mcp.custom_route("/people/cast", methods=["POST"])

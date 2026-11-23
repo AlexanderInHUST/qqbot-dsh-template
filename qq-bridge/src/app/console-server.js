@@ -465,6 +465,17 @@ export function createConsoleServer(app) {
           }
           return;
         }
+        // 她熟悉的外面的人（extras figures.py）：只看。同样带 agent token 的拒
+        if (req.method === 'GET' && url.pathname === '/api/figures') {
+          try {
+            const base = String(cfg.socialV2?.longTermMemory?.url ?? 'http://extras:8940/recall').replace(/\/recall$/, '');
+            const res = await fetch(`${base}/figures`, { signal: AbortSignal.timeout(10000) });
+            sendJson(await res.json(), res.status);
+          } catch (error) {
+            sendJson({ ok: false, error: String(error?.message ?? error) }, 502);
+          }
+          return;
+        }
         // 她的成长记录、作品集（extras milestones.py）。主人在这里看、删、补记；同样带 agent token 的拒
         if ((req.method === 'GET' && url.pathname === '/api/milestones')
           || (req.method === 'POST' && ['/api/milestones/add', '/api/milestones/delete'].includes(url.pathname))) {

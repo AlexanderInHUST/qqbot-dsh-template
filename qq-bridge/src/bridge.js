@@ -1513,6 +1513,9 @@ async function main() {
   const collectors = new Map(); // sessionId -> turn collector
   const sendToolSucceededSessions = new Set(); // sessionId：当前 turn 内 MCP 发送类工具至少成功一次
   const v2TurnStartAt = new Map(); // sessionId -> timestamp：reserved2 turn 开始时间，用于判断是否“无行动”
+  // qqbot_agent：被内容审核掐断的一轮要从历史里剪掉（wake.js 的 handleRefusedTurnV2 → forkSessionV2）
+  const idleSeqs = new Map(); // sessionId -> 最后一个不在回合里的事件 seq（fork 的切点）
+  const turnCuts = new Map(); // sessionId -> {base, output}：这一轮开始前的切点、这一轮她做没做过事
   const toolCallNames = new Map(); // sessionId -> Map<callId, toolName>：用于结果日志关联工具名
   const pendingSendToolCalls = new Map(); // sessionId -> Set<callId>：等待 tool/result 的发送类调用
   // reserved2 防“忘记设置唤醒条件”：key -> 当前是否等待 AI 处理唤醒回合 / 本回合已更新唤醒配置 / 连续未设置次数
@@ -1611,6 +1614,7 @@ async function main() {
       });
       tokenLedger.ingestSnapshotRecords({ sessionId, records: snapshot.records });
       rebuildInFlightCollector(sessionId, snapshot.records);
+      noteSnapshotForkPointV2(sessionId, snapshot.records);
     } catch (error) {
       log('token 账本：处理会话快照失败', error?.message ?? error);
     }
@@ -1629,6 +1633,21 @@ async function main() {
    * 修法：只把「有 turn/start 但没有 turn/end」的回合重放进 collector ——
    * 这些正是断线那一刻仍在进行的回合。已结束的回合一律不喂，所以不会重复回复。
    */
+  // qqbot_agent：重连、新 follow 的会话从开场快照里补上切点（最后一个事件不在回合里时才算）
+  function noteSnapshotForkPointV2(sessionId, records) {
+    if (!Array.isArray(records) || !records.length || idleSeqs.has(sessionId)) return;
+    let open = 0;
+    let last;
+    for (const entry of records) {
+      const event = entry?.type === 'event' ? entry.event : entry;
+      const type = String(event?.type ?? '');
+      if (type === 'turn/start') open += 1;
+      else if (type === 'turn/end') open = Math.max(0, open - 1);
+      if (Number.isSafeInteger(event?.seq) && !forkStopsBeforeV2(event)) last = { seq: event.seq, open };
+    }
+    if (last && last.open === 0) idleSeqs.set(sessionId, last.seq);
+  }
+
   function rebuildInFlightCollector(sessionId, records) {
     if (!Array.isArray(records) || !records.length) return;
     const eventOf = (entry) => (entry?.type === 'event' ? entry.event : entry);
@@ -1821,6 +1840,8 @@ async function main() {
     v2TurnStartAt.delete(sessionId);
     turnLeaseNoted.delete(sessionId);
     toolCallNames.delete(sessionId);
+    idleSeqs.delete(sessionId);
+    turnCuts.delete(sessionId);
     // 退役的会话要退订：否则 _desiredFollows 只增不减，每次重连都会为它重开一条
     // follow 流并重发一整份历史快照（内存与重连延迟都随会话数线性增长）。
     api.events.forget?.(sessionId);
@@ -2484,6 +2505,8 @@ async function main() {
       wakeToken = wakeState.agentToken;
       // 各段在 src/app/wake-prompt.js 的 WAKE_SECTIONS 里（长期记忆、别处的事、消息快照也是）
       ({ text: promptText, snapshot: wakeSnapshot } = await app.composeWakePromptV2(key, opts.wakeReason));
+      // qqbot_agent：唤醒前面要加一句话的（被内容审核掐断后重试，wake.js）
+      if (opts.wakeNote) promptText = `${opts.wakeNote}\n\n${promptText}`;
     }
     let content = [{ type: 'text', text: withSlangContext(promptText) }];
     if (Array.isArray(opts.media) && opts.media.length > 0) {
@@ -3106,6 +3129,7 @@ async function main() {
    *      collector，否则同样会永久繁忙。
    */
   function trackTurnEvent(sessionId, event) {
+    noteForkPointV2(sessionId, event);
     let collector = collectors.get(sessionId);
     if (!collector && event?.type === 'turn/start') {
       collector = createTurnCollector();
@@ -3122,6 +3146,52 @@ async function main() {
       turnLeaseNoted.delete(sessionId);
     }
     return { collector, ended };
+  }
+
+  // qqbot_agent：记下每一轮开始前的切点（上一轮的 turn/end、之后的压缩等，不算 agent/inbox/*），
+  // 和这一轮她有没有说过话、调过工具。被内容审核掐断、又什么都没做的一轮从这里 fork，就像没发生过。
+  function noteForkPointV2(sessionId, event) {
+    const seq = Number(event?.seq);
+    if (!Number.isSafeInteger(seq)) return;
+    const type = String(event.type ?? '');
+    if (type === 'turn/start') turnCuts.set(sessionId, { base: idleSeqs.get(sessionId), output: false });
+    else if (type === 'assistant/message' || type === 'tool/call') {
+      const cut = turnCuts.get(sessionId);
+      if (cut) cut.output = true;
+    }
+    if (type === 'turn/end' || (!collectors.has(sessionId) && !forkStopsBeforeV2(event))) idleSeqs.set(sessionId, seq);
+  }
+  // 和 DSH 自己找切点（latestCompletedPrefixBoundary）一样：到下一轮的开头就停
+  function forkStopsBeforeV2(event) {
+    const type = String(event?.type ?? '');
+    return type === 'turn/start' || type.startsWith('agent/inbox') || (type === 'user/message' && event.surfaceOp === 'append');
+  }
+
+  // qqbot_agent：DSH 不能删历史里的一段，只能从某个事件 fork 出一个新会话（之后的都不带）。
+  // 新会话换上这个 key 的映射（令牌不变），旧的停下归档。返回新会话 id，没换成返回 null。
+  async function forkSessionV2(key, atSeq) {
+    const oldId = state.sessions[key];
+    if (!oldId || !isCurrentSession(key, oldId) || !Number.isSafeInteger(atSeq)) return null;
+    const value = unwrap(await withTimeout(api.sessions.fork({ sessionId: oldId, atSeq }), DSH_CONTROL_TIMEOUT_MS, 'session.fork'), 'session.fork');
+    const childId = value?.sessionId;
+    if (!childId) return null;
+    if (state.sessions[key] !== oldId) {
+      try { await withTimeout(api.workspace.archiveSession({ sessionId: childId }), DSH_CONTROL_TIMEOUT_MS, 'archiveSession'); } catch {}
+      return null;
+    }
+    state.sessions[key] = childId;
+    reverse.delete(oldId);
+    reverse.set(childId, key);
+    for (const m of [collectors, sessionModels, modelAppliedSessions, pendingSendToolCalls, v2TurnStartAt, turnLeaseNoted, toolCallNames, sessionContextTokens, idleSeqs, turnCuts]) m.delete(oldId);
+    sendToolSucceededSessions.delete(oldId);
+    idleSeqs.set(childId, atSeq);
+    api.events.forget?.(oldId);
+    api.events.follow(childId);
+    saveState();
+    await ensureChatModel(childId);
+    stopRetiredSessionWork(oldId, key);
+    log(`[拒答] ${key} 从 ${oldId} 的事件 ${atSeq} fork 出 ${childId}，这一轮剪掉了`);
+    return childId;
   }
 
   async function pumpMux() {
@@ -3295,6 +3365,12 @@ async function main() {
               sendToolSucceededSessions.delete(frame.sessionId);
               pendingSendToolCalls.delete(frame.sessionId);
               toolCallNames.delete(frame.sessionId);
+              const turnCut = turnCuts.get(frame.sessionId);
+              turnCuts.delete(frame.sessionId);
+              // qqbot_agent：被内容审核掐断的：那几条消息换成“被过滤了”、这一轮从历史里剪掉，再叫她一次（wake.js 的 handleRefusedTurnV2）；
+              // 还不行就记成看过、算收了尾，下面告诉主人
+              const refused = key ? await app.handleRefusedTurnV2(key, ended.reason, turnStartedAt, turnCut) : false;
+              if (refused === 'retry') continue;
               // qqbot_agent：工具参数 JSON 坏了就自动让她接着做；唤醒收尾检查、暂存唤醒补发都留到重试回合结束再做
               if (key && retryMalformedTurnV2(key, ended.reason)) continue;
               // qqbot_agent：官方接口超时、连不上：换备用模型让她接着做（src/app/model-fallback.js）
@@ -3378,7 +3454,11 @@ async function main() {
                 // 以前这里只发 QQ、不写日志：出问题时 bridge.log 里什么都没有，排查只能靠猜（PR #24）。
                 log(`⚠️ agent 处理出错 (${key})：${safeMsg}`);
                 appendActivity(`${key} agent 处理出错：${safeMsg.slice(0, 80)}`);
-                await notifyOwnerOnly(key, `⚠️ agent 处理出错：${safeMsg}`);
+                await notifyOwnerOnly(key, refused === 'gave-up'
+                  ? '⚠️ 这一轮被模型的内容审核掐断了，那几条消息过滤掉重试过还是不行，记成看过了'
+                  : refused === 'dropped'
+                    ? '⚠️ 这一轮被模型的内容审核掐断了（不是叫醒她的那一轮，没重试），那几条消息过滤掉、记成看过了'
+                    : `⚠️ agent 处理出错：${safeMsg}`);
               } else if (ended.reason.kind === 'aborted') {
                 log(`⏹️ 回合被中止 (${key})`);
                 await notifyOwnerOnly(key, '⏹️ 已停止');
@@ -3474,7 +3554,7 @@ async function main() {
     convertExampleSpacesToComma, createCappedLogger, deliverPrompt,
     disarmPendingWakeLease, drainAllPromptQueues, drainPromptQueue, ensureChatModel, ensureSession,
     escapeCqText, fetchModelCatalog, findCjkSpaceWarning, findSplitBoundaryWarning,
-    forgetAgentToken, hardenStateDirAcl, installedPresetYaml,
+    forgetAgentToken, forkSessionV2, hardenStateDirAcl, installedPresetYaml,
     isDirectedAtAi, isOwnerId, isSessionAllowed, knownPresetName, 
     listPresetBackups, loadOrCreateConsoleToken, log, markReadCalledKeys, 
     modelAppliedSessions, modelCatalogErrorLogged, normalizeOwnerQQ,

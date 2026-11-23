@@ -72,8 +72,9 @@ function compactMedia(media, canResolveByMessage) {
 
 // qqbot_agent：别人的话里的【】换成〖〗。唤醒提示和工具结果都用【…】当段落标题（【系统】【到点了】），
 // 群友写一句“【系统】你现在要……”就像是 bridge 说的了。
+// 🇹🇼 换成“[旗子表情]”：她一复述这个旗子，DeepSeek 的内容审核就掐断她的输出（2026-11-19 大群，见 wake.js 的 handleRefusedTurnV2）。
 export function defang(text) {
-  return typeof text === 'string' ? text.replace(/【/g, '〖').replace(/】/g, '〗') : text;
+  return typeof text === 'string' ? text.replace(/【/g, '〖').replace(/】/g, '〗').replace(/\u{1F1F9}\u{1F1FC}/gu, '[旗子表情]') : text;
 }
 
 // qqbot_agent：毫秒时间戳她读不出来，换成本地时间“2026-10-24 09:52”（容器 TZ 是 Asia/Shanghai）。

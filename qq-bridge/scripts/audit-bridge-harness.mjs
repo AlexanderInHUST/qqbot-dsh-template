@@ -51,7 +51,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, typeof content === 'string' ? content : JSON.stringify(content));
   }
-  const calls = { created: [], archived: [], sent: [], prompts: [], follows: [], cancelled: [], images: [], faces: [], http: [] };
+  const calls = { created: [], archived: [], sent: [], prompts: [], follows: [], cancelled: [], images: [], faces: [], http: [], forks: [] };
   // 语音发送在桥接里是**直接 fetch 网关**（与文本/表情共用 sendChain，但要自己带 record 段），
   // 所以这里给 VM 注入一个记录型 fetch：既不让测试真的发 QQ 消息，又能断言发出的段内容。
   const fakeFetch = async (url, init = {}) => {
@@ -92,6 +92,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
       create: async (params) => { calls.created.push(params); return success({ sessionId: `fixture-${calls.created.length}` }); },
       selectModel: async () => success({ selected: { provider: 'fixture', model: 'fixture' } }),
       prompt: async (params) => { calls.prompts.push(params); return success({}); },
+      fork: async (params) => { calls.forks.push(params); return success({ sessionId: `fixture-fork-${calls.forks.length}` }); },
     },
     respond: async () => success({}),
     stopSessionWork: async (sessionId) => { calls.cancelled.push(sessionId); return { removed: 0 }; },
@@ -141,7 +142,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     ensureSession, resolvePresetName, deliverPrompt, drainPromptQueue, sendToQQ, handleIncoming, cfg, state,
     api, promptQueues, allowed, trackTurnEvent, collectors, pendingWakeKeys,
     extractMediaFromSegments, segmentsToText, bot, v2TurnStartAt, turnLeaseNoted, TURN_BUSY_LEASE_MS,
-    handlePokeNotice, pokeWakeOkV2, sessionContextTokens, log,
+    handlePokeNotice, pokeWakeOkV2, sessionContextTokens, log, idleSeqs, turnCuts,
     setSelfIdentity(display, id) {
       selfDisplayName = String(display ?? '');
       selfUserId = String(id ?? '');
