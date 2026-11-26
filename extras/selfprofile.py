@@ -420,8 +420,9 @@ PROMPT = """你在帮一个叫“{bot}”的孩子慢慢长大。她是 QQ 群�
 
 
 def _recent_changes(db: dict, now: float, days: float) -> list[dict]:
-    # rollback and the one-time calibration (11-04, from what she had done since October) don't count
-    return [c for c in db.get("changes") or [] if c.get("op") not in ("rollback", "calibrate")
+    # rollback, the one-time calibration (11-04, from what she had done since October) and the owner's
+    # hand edits (owner-edit, 11-25 说话 dropped the per-sentence char count) don't count
+    return [c for c in db.get("changes") or [] if c.get("op") not in ("rollback", "calibrate", "owner-edit")
             and now - c.get("time", 0) < days * DAY]
 
 

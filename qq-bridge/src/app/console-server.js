@@ -2025,8 +2025,8 @@ export function createConsoleServer(app) {
             if (sentMessages.length > 0) afterSentV2(key);
             const notSent = releaseNotSentV2(st, now, sentMessages);
             const burstHint = notSent.length ? interruptHintV2(sentMessages.length, notSent)
-              : askedMessages.length > messages.length ? mergedHintV2(askedMessages.length, messages.length)
-              : messages.length >= 3 ? '你已经连发了多条，确认是必要的吗？真人很少一口气补完。' : undefined;
+              : messages.merged ? mergedHintV2(askedMessages.length, bubbleCapV2(key))
+              : askedMessages.length >= 4 ? '你已经连发了多条，确认是必要的吗？真人很少一口气补完。' : undefined;
             const promiseHint = sentMessages.length && !sentByPlay(key, req.headers['x-agent-token']) ? promiseHintV2(key, sentMessages) : null;
             const showHint = sentMessages.length ? showHintV2(key, sentMessages, { byPlay: sentByPlay(key, req.headers['x-agent-token']) }) : null;
             const repeatHint = sentMessages.length ? repeatHintV2(key, sentMessages) : null;
@@ -2186,8 +2186,8 @@ export function createConsoleServer(app) {
             if (sentMessages.length > 0) afterSentV2(key);
             const notSent = releaseNotSentV2(st, now, sentMessages);
             const burstHint = notSent.length ? interruptHintV2(sentMessages.length, notSent)
-              : askedMessages.length > messages.length ? mergedHintV2(askedMessages.length, messages.length)
-              : messages.length >= 3 ? '你已经连发了多条，确认是必要的吗？真人很少一口气补完。' : undefined;
+              : messages.merged ? mergedHintV2(askedMessages.length, bubbleCapV2(key))
+              : askedMessages.length >= 4 ? '你已经连发了多条，确认是必要的吗？真人很少一口气补完。' : undefined;
             const promiseHint = sentMessages.length && !sentByPlay(key, req.headers['x-agent-token']) ? promiseHintV2(key, sentMessages) : null;
             const showHint = sentMessages.length ? showHintV2(key, sentMessages, { byPlay: sentByPlay(key, req.headers['x-agent-token']) }) : null;
             const repeatHint = sentMessages.length ? repeatHintV2(key, sentMessages) : null;

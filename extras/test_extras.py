@@ -838,6 +838,37 @@ class AntiPollutionTest(unittest.TestCase):
         self.assertIn("接口", reasons)
         self.assertIn("机器人自己的技术/部署的事，不记（DeepSeek）", reasons)
 
+    def test_what_she_says_about_herself_is_kept_long(self):
+        # 2026-11-24 她在大群说了三回“我是不吃鱼的”，第二天就不认了：她自己的话以前从来不进长期记忆
+        now = time.time() - 3600
+        msgs = [self.msg(self.OTHER, "来吃海鲜啊", now, 1),
+                self.msg(self.BOT, "我是不吃鱼的，虾和扇贝也是海底邻居", now + 1, 2),
+                self.msg(self.BOT, "今天中午吃了面条", now + 2, 3)]
+        reply = {"rules": [], "facts": [
+            {"op": "add", "subject": "self", "lasting": True, "text": "11月24日有人拿海鲜逗我，我说过我是不吃鱼的", "from": [2]},
+            {"op": "add", "subject": "self", "text": "11月24日中午吃了面条", "from": [3]}]}
+        _, llm = self.run_digest(msgs, reply)
+        self.assertIn('"lasting": true', llm.call_args.args[0])
+        mine = {e["text"]: e for e in memory.entries_for(["self"])}
+        trait = mine["11月24日有人拿海鲜逗我，我说过我是不吃鱼的"]
+        self.assertEqual(trait.get("kind"), "trait")
+        self.assertNotIn("kind", mine["11月24日中午吃了面条"])
+        cfg = memory._cfg()
+        later = time.time() + 30 * 86400
+        self.assertGreater(memory.strength(trait, cfg, later), 0.6)
+        self.assertLess(memory.strength(mine["11月24日中午吃了面条"], cfg, later), 0.1)
+        # the next digest lists it as lasting, and an update keeps it a trait
+        msgs2 = [self.msg(self.OTHER, "你不是不吃鱼？", now + 60, 4), self.msg(self.BOT, "我吃鱼的呀", now + 61, 5)]
+        reply2 = {"rules": [], "facts": [{"op": "update", "id": trait["id"], "lasting": True,
+                                          "text": "11月24日说过不吃鱼，11月25日又说吃鱼，算改主意了", "from": [2]}]}
+        _, llm = self.run_digest(msgs2, reply2)
+        self.assertIn(f"[{trait['id']}] (self，lasting)", llm.call_args.args[0])
+        self.assertEqual(memory.get(trait["id"])["kind"], "trait")
+        self.assertIn("改主意", memory.get(trait["id"])["text"])
+        # her own memory_note can't make one
+        r = memory.note("self", "我说过我怕打雷", "group:123456")
+        self.assertNotIn("kind", memory.get(r["added"]))
+
     def test_owner_feedback_goes_to_feedback_not_rules(self):
         import feedback
         now = time.time() - 3600
@@ -1176,6 +1207,26 @@ class PeopleItemsTest(unittest.TestCase):
         p.rollback(self.LV)
         self.assertEqual({it["id"] for it in p.get(self.LV)["items"]}, keep)
 
+    def test_too_long_edit_is_shortened_once(self):
+        p = self.people
+        a = self.note(self.LV, "清仓了股票", "digest:group:1100000001")
+        prompts = []
+        replies = [json.dumps({"ops": [{"op": "add", "sec": "了解", "text": "长" * 70, "from": [a]},
+                                       {"op": "add", "sec": "了解", "text": "短的", "from": [a]}]}, ensure_ascii=False),
+                   json.dumps({"ops": [{"op": "add", "sec": "了解", "text": "清仓了股票", "from": [a]}]}, ensure_ascii=False)]
+        with mock.patch("builtins.print"):  # 测试里 itemChars 是代码默认的 60
+            out = p.rewrite(self.LV, lambda prompt: prompts.append(prompt) or replies.pop(0))
+        self.assertEqual(replies, [])
+        self.assertIn("长" * 70, prompts[1])  # 只把太长的那条拿去改短
+        self.assertNotIn("短的", prompts[1])
+        self.assertEqual(out["rejected"], [])
+        self.assertEqual(sorted(it["text"] for it in p.get(self.LV)["items"]), ["清仓了股票", "短的"])
+        # 改短还是太长、或者回的不是 JSON：照旧作废，卡上别的照存
+        replies = [json.dumps({"ops": [{"op": "add", "sec": "了解", "text": "长" * 70, "from": [a]}]}, ensure_ascii=False), "不是JSON"]
+        with mock.patch("builtins.print"):
+            out = p.rewrite(self.LV, lambda prompt: replies.pop(0))
+        self.assertTrue(out["rejected"][0][1].startswith("一条太长"))
+
 
 class LifeTest(unittest.TestCase):
     def setUp(self):
@@ -1374,6 +1425,9 @@ class SelfCheckTest(unittest.TestCase):
         self.assertEqual(effort, "low")
         for part in ("今天上电脑玩了 5 回", "13:01 在小群：吃完了", "爸爸: 我再玩会", "妈妈的私聊", "阿红: 记得汇报"):
             self.assertIn(part, prompt)
+        # 11-25：往少里说、说个大概不算说岔（以前提示里拿“就晚上玩了一阵”当矛盾的例子，她被纠正后越改越乱）
+        self.assertIn("往少里说", prompt)
+        self.assertNotIn("就晚上玩了一阵", prompt.split("【她刚发的话】")[0])
 
     def test_only_fragments_from_this_batch(self):
         # 10-23 实测：上一批说过的“就晚上玩了一阵”“他一睡我就告诉你”在下一批又被挑出来
@@ -1652,6 +1706,17 @@ class SelfProfileTest(unittest.TestCase):
         # just grew: no second grow this soon
         applied, rejected = selfprofile.apply_ops(db, ops[2:], [], cfg, now, names=[])
         self.assertFalse(applied)
+
+    def test_owner_edit_takes_no_weekly_slot(self):
+        # 11-25 主人改了一条说话（去掉一句几个字），不该占她一周的名额
+        import selfprofile
+        selfprofile.seed(self.SMALL)
+        db, cfg, now = selfprofile._load(), selfprofile._cfg(), time.time()
+        free = selfprofile._limits(db, cfg, now, 8.0)["free"]
+        db["changes"] = [{"time": now - 60, "op": "owner-edit", "sec": "说话"}]
+        self.assertEqual(selfprofile._limits(db, cfg, now, 8.0)["free"], free)
+        db["changes"] = [{"time": now - 60, "op": "add", "sec": "喜欢"}]
+        self.assertEqual(selfprofile._limits(db, cfg, now, 8.0)["free"], free - 1)
 
     def test_prompt_tells_the_size_limits(self):
         # 11-05~11-09 she proposed 5 changes and 4 were thrown out only for being too long: the model never saw the limits
@@ -2370,6 +2435,21 @@ class FiguresTest(unittest.TestCase):
         self.assertEqual(f["name"], "小绿")
         self.assertEqual(len(f["days"]), 2)
         self.assertIn(self.day, self.f._load()["nights"])
+
+    def test_loved_follows_the_nightly_keep_not_her_own_rating(self):
+        a = put_log("看了班廷做胰岛素的科普", self.start + 3600, interest=3)
+        op = {"op": "add", "name": "班廷", "kind": "人物", "sections": {"是谁": "做出胰岛素的医生。"}, "from": [a]}
+        db = memory._load()
+        next(e for e in db["entries"] if e["id"] == a)["keep"] = 1  # 夜里判的“可能聊到”：她填的超喜欢不算
+        memory.save_json(memory.PATH, db)
+        r, prompts = self.night([op])
+        self.assertEqual(r["rejected"][0][1], "只碰到过 1 天")
+        self.assertNotIn("她特别喜欢", prompts[0])
+        next(e for e in db["entries"] if e["id"] == a)["keep"] = 2
+        memory.save_json(memory.PATH, db)
+        r, prompts = self.night([op])
+        self.assertIn("她特别喜欢", prompts[0])
+        self.assertTrue(next(iter(self.f.all_figures().values()))["loved"])
 
     def test_loved_card_alias_update_and_fuzzy_marks(self):
         self.card()

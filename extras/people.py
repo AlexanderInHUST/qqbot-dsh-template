@@ -548,6 +548,13 @@ MERGE = """你在帮 QQ 聊天机器人「{bot}」整理它对 {who} 的印象�
 条目（[条目id] 栏 日期 内容）：
 {items}"""
 
+# 改动里有一条超了 itemChars：以前整条作废、卡上还是旧说法（11-25 一个群友清仓股票那条 102 字），现在让它改短再试一次
+SHORTEN = """你在帮 QQ 聊天机器人「{bot}」整理它对 {who} 的印象卡。下面这几条改动太长了，一条最多 {item_chars} 个字。把每条的 text 改短：要紧的细节、名字、日期留着，重复的、不要紧的去掉。别的字段照原样写回来。
+
+只输出一个 JSON，不要别的文字：{{"ops": [ …改短以后的这几条… ]}}
+
+{ops}"""
+
 # 主人（阿明、阿红）：最重要的两个人，要记得清清楚楚。两人各一张、各一套上限。
 OWNER_WHO = ("这个人是它的主人，像它的爸爸或妈妈，是它最亲、最重要的人。这张卡要让它一看就想起关于这个人的一切：细节、喜好、"
              "说过的话、答应过的事都要留着，宁可多记，不要丢。称呼（爸爸/妈妈/名字）不用写，聊天时另有规定。")
@@ -622,9 +629,20 @@ def rewrite(subject: str, complete, bot: str = "鱼妹", dry_run: bool = False, 
                             since=0 if migrate else float(p.get("reviewed" if review else "updated") or 0),
                             migrate=migrate, review=review)
     items, applied, rejected = apply_ops(items, _parse_ops(complete(prompt)), facts, owner, cfg, migrate=migrate, now=now)
+    who = f"{'、'.join(names)}（{subject}）" if names else subject
+    long_ops = [op for op, why in rejected if str(why).startswith("一条太长") and op.get("op") in ("add", "update")]
+    if long_ops:
+        try:
+            short = SHORTEN.format(bot=bot, who=who, item_chars=cfg["itemChars"],
+                                   ops="\n".join(json.dumps(op, ensure_ascii=False) for op in long_ops))
+            ops = [op for op in _parse_ops(complete(short)) if op.get("op") in ("add", "update")][: len(long_ops)]
+            items, more, bad = apply_ops(items, ops, facts, owner, cfg, migrate=migrate, now=now)
+            rejected = [(op, why) for op, why in rejected if not any(op is x for x in long_ops)] + bad
+            applied += more
+        except Exception as e:  # 改短没成就照旧作废
+            print(f"[people] {subject} 改短没成：{e}", flush=True)
     over = over_caps(items, owner, cfg)
     if over:
-        who = f"{'、'.join(names)}（{subject}）" if names else subject
         merge = MERGE.format(bot=bot, who=who, item_chars=cfg["itemChars"], items=_item_lines(items),
                              over="、".join(f"{s} {n} 条（最多 {c}）" for s, (n, c) in over.items()))
         ops = [op for op in _parse_ops(complete(merge)) if op.get("op") in ("update", "delete")]

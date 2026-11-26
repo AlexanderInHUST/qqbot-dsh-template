@@ -76,7 +76,7 @@ test('pre-reply quiet checks, waiting for more and leaving after replying have d
 test('social autonomy and visual, forwarding, sticker and web capabilities remain described', () => {
   for (const text of [
     // qqbot_agent：语气交给人格卡，原来的「反 AI 味/保持主体性/学习群友/不当群管家」合并成下面几节
-    '【怎么在 QQ 里混】', '【帮人查东西】', '【自由时间】', '【长期记忆（跨会话）】', '大多数时候回一条就够了', '不要用空格断句',
+    '【怎么在 QQ 里混】', '【帮人查东西】', '【自由时间】', '【长期记忆（跨会话）】', '大多数时候说一两句就够了', '不要用空格断句',
     '不会自动发送到 QQ', 'qq_get_message_images', 'qq_get_forward_msg', 'nestedForwardIds',
     'qq_send_poke', 'qq_list_stickers', 'qq_get_sticker_image', 'qq_send_sticker',
     'qq_collect_sticker', 'qq_sticker_note', 'qq_get_self_image',

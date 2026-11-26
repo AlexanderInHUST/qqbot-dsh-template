@@ -17,7 +17,7 @@ export function createHumanSend(app) {
 
   // qqbot_agent：像人打字那样发（socialV2.send.human，enabled:true 才生效）。
   //   · 条间隔 = 打下一条要的时间：baseMs + 字数 × perCharMs，±jitter，夹在 [minMs, maxMs]；她传的 gapMs/gaps 不管用；
-  //   · 一次最多几条按场景（maxBubbles：私聊 / 家里的群 / 别的群），多出来的并进最后一条；
+  //   · 一次最多几条按场景（maxBubbles：私聊 / 家里的群 / 别的群），多出来的并进最后一条；长的一条再拆短（split，见下面）；
   //   · cutOnInterrupt：两条之间对方插话（私聊里对方说了话，群里有人 @/引用/叫她），后面的不发了，返回 notSent 让她先看。
   // 以前固定 0.5 秒一条，三四条一下子全冒出来，不像打字。
   function humanSendCfgV2() {
@@ -34,7 +34,81 @@ export function createHumanSend(app) {
       maxMs: Math.max(minMs, num(h.maxMs, 4000)),
       cutOnInterrupt: h.cutOnInterrupt !== false,
       maxBubbles: { private: Math.max(0, num(mb.private, 4)), home: Math.max(0, num(mb.home, 4)), group: Math.max(0, num(mb.group, 2)) },
+      split: {
+        enabled: h.split?.enabled !== false,
+        longChars: Math.max(10, num(h.split?.longChars, 30)),
+        minChars: Math.max(1, num(h.split?.minChars, 6)),
+        maxTotal: Math.max(1, num(h.split?.maxTotal, 8)),
+      },
     };
+  }
+  // qqbot_agent（2026-11-25）：长的一条拆成几条短的（split）。真人一句话长了会在句号、逗号那里断开连着发，
+  // 她老是一条塞一大段（主人：“真人会把一句很长的话，拆成几个短句说，一次发几句很正常，而不是攒一起”）。
+  //   · 超过 longChars 的才拆：先在 。！？；（和换行）断句，断完还超过 longChars 的句子再在 ，、 处断；
+  //   · 每段至少 minChars 字，短的并回前一段；引号、括号里面不断；带链接、CQ 码的整条不动；
+  //   · 断开处的 。；，、 去掉（QQ 上一条末尾一般不打句号），！？ 留着；全部加起来最多 maxTotal 条，到了就不再拆。
+  const OPEN_Q = '“「『（(《【"';
+  const CLOSE_Q = '”」』）)》】"';
+  function cutAtV2(text, re) {
+    const out = [];
+    let depth = 0;
+    let cur = '';
+    for (const ch of text) {
+      if (ch === '"') depth = depth > 0 ? depth - 1 : depth + 1;
+      else if (OPEN_Q.includes(ch)) depth++;
+      else if (CLOSE_Q.includes(ch)) depth = Math.max(0, depth - 1);
+      cur += ch;
+      if (depth === 0 && re.test(ch)) { out.push(cur); cur = ''; }
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+  function tidyPieceV2(p) {
+    return p.replace(/^[\s，,、]+/, '').replace(/[\s。；;，,、]+$/, '').trim();
+  }
+  function joinShortV2(pieces, minChars) {
+    const out = [];
+    for (const p of pieces) {
+      if (out.length && [...p].length < minChars) {
+        out[out.length - 1] += p;
+      } else if (out.length && [...tidyPieceV2(out[out.length - 1])].length < minChars) {
+        out[out.length - 1] += p;
+      } else out.push(p);
+    }
+    return out;
+  }
+  function splitBubbleV2(text, sc) {
+    const s = String(text ?? '');
+    if ([...s].length <= sc.longChars || /https?:\/\/|www\.|\[CQ:/i.test(s)) return [s];
+    const sentences = joinShortV2(cutAtV2(s, /[。！？!?；;\n]/), sc.minChars);
+    const pieces = [];
+    for (const sen of sentences) {
+      if ([...tidyPieceV2(sen)].length <= sc.longChars) { pieces.push(sen); continue; }
+      pieces.push(...joinShortV2(cutAtV2(sen, /[，,、]/), sc.minChars));
+    }
+    const tidy = pieces.map(tidyPieceV2).filter(Boolean);
+    return tidy.length ? tidy : [s];
+  }
+  // 拆完超过 maxTotal：在同一条拆出来的相邻两段里挑合起来最短的并回去，直到够数（最坏就是没拆，不会比原来长）
+  function splitBubblesV2(messages) {
+    const h = humanSendCfgV2();
+    if (!h.enabled || !h.split.enabled) return messages;
+    const groups = messages.map((m) => splitBubbleV2(m, h.split));
+    let total = groups.reduce((n, g) => n + g.length, 0);
+    while (total > Math.max(h.split.maxTotal, messages.length)) {
+      let best = null;
+      groups.forEach((g, gi) => {
+        for (let i = 0; i + 1 < g.length; i++) {
+          const len = [...g[i]].length + [...g[i + 1]].length;
+          if (!best || len < best.len) best = { gi, i, len };
+        }
+      });
+      if (!best) break;
+      const g = groups[best.gi];
+      g.splice(best.i, 2, glueV2(g[best.i], g[best.i + 1]));
+      total--;
+    }
+    return groups.flat();
   }
   function bubbleCapV2(key) {
     const h = humanSendCfgV2();
@@ -45,15 +119,20 @@ export function createHumanSend(app) {
     if (!cap || !me.enabled || !me.coupleBubbles) return cap;
     return Math.max(1, cap + moodBubbleDelta(socialV2.mood, Date.now(), me.halfLifeMinutes));
   }
-  // 超过条数上限：前面的照发，多出来的并进最后一条（中间补个逗号，已经有标点就不补）
+  // 两条接成一条：中间补个逗号，已经有标点就不补
+  function glueV2(acc, m) {
+    if (!acc) return m;
+    const glue = /[，。！？!?…~～、,.;；:：)）」』】\]]$/.test(acc) || /^[，。！？!?…~～、,.]/.test(m) ? '' : '，';
+    return acc + glue + m;
+  }
+  // 超过条数上限：前面的照发，多出来的并进最后一条；再把长的拆短（splitBubblesV2）。
+  // 返回的数组上 merged=true 表示并过（发送结果里提醒她一次）。
   function mergeBubblesV2(messages, cap) {
-    if (!(cap >= 1) || messages.length <= cap) return messages;
-    const tail = messages.slice(cap - 1).reduce((acc, m) => {
-      if (!acc) return m;
-      const glue = /[，。！？!?…~～、,.;；:：)）」』】\]]$/.test(acc) || /^[，。！？!?…~～、,.]/.test(m) ? '' : '，';
-      return acc + glue + m;
-    }, '');
-    return [...messages.slice(0, cap - 1), tail];
+    const merged = cap >= 1 && messages.length > cap;
+    const list = merged ? [...messages.slice(0, cap - 1), messages.slice(cap - 1).reduce(glueV2, '')] : messages;
+    const out = splitBubblesV2(list);
+    if (merged) out.merged = true;
+    return out;
   }
   function typingGapV2(nextMsg, h) {
     const chars = Math.max(1, [...String(nextMsg ?? '')].length);
@@ -186,6 +265,7 @@ export function createHumanSend(app) {
       interruptHintV2,
       mergeBubblesV2,
       mergedHintV2,
+      splitBubbleV2,
       releaseNotSentV2,
       sendMessagesV2,
     },

@@ -348,6 +348,29 @@ await test('条数上限按场景：私聊/家里的群 4、别的群 2，多的
   assert.deepEqual(plain(h.mergeBubblesV2(['a', 'b', 'c'], 0)), ['a', 'b', 'c'], '0 = 不限');
 }, { send: { human: { enabled: true } } }));
 
+await test('长的一条拆成几条短的：句号处断、长句再在逗号处断，短的并回去，引号和链接不断，总条数有上限', () => fixture(async ({ h }) => {
+  const sc = h.humanSendCfgV2().split;
+  const split = (s) => plain(h.splitBubbleV2(s, sc));
+  assert.deepEqual(split('查到啦，在中环摆花街一号广场二楼，午市十一点半才开门'), ['查到啦，在中环摆花街一号广场二楼，午市十一点半才开门'], '30 字以内不拆');
+  assert.deepEqual(split('刚玩完 2048 呀，128 一直压在左上角没挪窝，靠多按左和上一点点喂大的'),
+    ['刚玩完 2048 呀', '128 一直压在左上角没挪窝', '靠多按左和上一点点喂大的'], '一整句太长就在逗号处断，断处的逗号去掉');
+  assert.deepEqual(split('看完了！林奇苑最稳，招牌是蜜香铁观音，进店就能试茶。付款不用只带现金，能刷卡，不过老铺带点现金更保险。'),
+    ['看完了！林奇苑最稳，招牌是蜜香铁观音，进店就能试茶', '付款不用只带现金，能刷卡，不过老铺带点现金更保险'], '先按句号断，太短的“看完了！”并进下一句');
+  const q = split('不过真有一种叫“铁观音蜜茶，冬蜜泡的，腌出来的那种”，你买的时候看名字就知道了');
+  assert.ok(q.some((p) => p.includes('“铁观音蜜茶，冬蜜泡的，腌出来的那种”')), `引号里面不断：${JSON.stringify(q)}`);
+  const url = '你看这个 https://www.bilibili.com/video/BV1xx 超好笑，真的，我笑了好久好久好久好久好久';
+  assert.deepEqual(split(url), [url], '带链接的不动');
+  const long = Array.from({ length: 12 }, (_, i) => `第${i}句话说得长一点点。`).join('').repeat(1);
+  const out = h.mergeBubblesV2([long], 4);
+  assert.equal(out.length, 8, `最多 8 条：${JSON.stringify(out)}`);
+  assert.ok(!out.merged, '只是拆开不算并过');
+  const many = plain(h.mergeBubblesV2(['我先查了林奇苑。它最稳，能试茶。差评是不买就给脸色。', '福建茶行老板会泡给你喝，便宜耐泡，就是香气没那么冲，喜欢花香的会嫌闷，尧阳是蔡澜常去的那家，火味重，新手喝不惯，周日还不开门'], 4));
+  assert.ok(many.length <= 8 && Math.max(...many.map((x) => [...x].length)) < 40, `够数了就把短的并回去，不会剩一大段：${JSON.stringify(many)}`);
+  assert.ok(h.mergeBubblesV2(['a', 'b', 'c', 'd', 'e'], 4).merged, '超过条数上限才算并过');
+  h.cfg.socialV2.send.human.split = { enabled: false };
+  assert.deepEqual(plain(h.mergeBubblesV2(['刚玩完 2048 呀，128 一直压在左上角没挪窝，靠多按左和上一点点喂大的'], 4)).length, 1, 'split 关着不拆');
+}, { send: { human: { enabled: true } } }));
+
 await test('发送接口：别的群合并成 2 条并提示；两条之间对方插话后面的不发、退回 notSent', () => fixture(async ({ h, group, call }) => {
   const big = group('789');
   let r = await call('/api/socialV2/send-message', 'group:789', big.agentToken, { messages: ['一', '二', '三'] });

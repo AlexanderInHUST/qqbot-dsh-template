@@ -20,6 +20,8 @@
     "maxPerSubject": 40,
     "maxPerOwner": 300,
     "maxSelf": 80,
+    "maxThemes": 200,
+    "themes": {"maxThemesShown": 200, "themeChars": 200},
     "recallPerSubject": 15,
     "maxChars": 0,
     "maxRules": 60,
@@ -40,7 +42,7 @@
     },
     "consolidate": {
       "enabled": true,
-      "hour": 4,
+      "hour": 3,
       "foldBelow": 0.5,
       "minFold": 5,
       "maxSummaries": 8,
@@ -59,10 +61,10 @@
   },
   "people": {
     "enabled": true,
-    "ownerMaxChars": 1500,
-    "itemChars": 100,
-    "maxChars": 300,
-    "maxTotalChars": 900,
+    "ownerMaxChars": 2200,
+    "itemChars": 150,
+    "maxChars": 450,
+    "maxTotalChars": 1350,
     "versions": 5,
     "sections": {
       "了解": {"owner": 20, "friend": 5},

@@ -26,6 +26,11 @@ Which memories a wake gets, and which ones fade:
   4 AM cleanup deletes the file too. Shown only in the chat the file belongs to (fileKey); it fades like her
   own things (fileHalfLifeDays, owners' chats too), and talking about it, reading or sending it is a hit.
   Never folded into summaries, never handed to digest / people / life / selfprofile / milestones.
+- "她说过的自己" (kind="trait", subject self, 2026-11-25): what she said about herself that stays true —
+  likes, dislikes, what she won't eat, what she's afraid of (11-24 she told a big group "我是不吃鱼的" three
+  times, next day she denied ever saying it: only the session had it, and compaction dropped it). Only
+  digest.py writes them, from her own lines. They fade slowly (traitHalfLifeDays), are never folded into
+  summaries, and come back whenever the chat touches them like any other memory.
 - consolidate.py (nightly) folds faded memories into a few summary entries (which decay 4x
   slower) and deletes what has faded almost completely.
 
@@ -74,7 +79,8 @@ def _cfg() -> dict:
         # 讲过的见闻：她在哪个会话把它讲出来了（bridge 发 /memory/told），之后不再拿它当话头，
         # 只有聊天里又说到它才带上（标“讲过了”）。enabled:false 回到旧行为
         "logTold": {},
-        "fileHalfLifeDays": 7, "maxFiles": 30, "recallFiles": 3,  # 文件：淡得和她自己的事一样快；每个聊天最多记几个
+        "fileHalfLifeDays": 7, "maxFiles": 30, "recallFiles": 3,
+        "traitHalfLifeDays": 60,     # 她说过的自己（kind=trait）：喜欢、不喜欢、不吃什么，淡得慢  # 文件：淡得和她自己的事一样快；每个聊天最多记几个
         "logProtectHours": 36,       # 刚记的见闻这么久内不被挤掉：等 4 点那次看过“以后用不用得到”再说
         "keepHalfLifeDays": {"0": 1, "1": 4, "2": 14},  # 夜里定的 keep：0 鸡毛蒜皮 / 1 可能聊到 / 2 多半还会用到
         "themeHalfLifeDays": 21, "themeDayBoost": 0.5, "maxThemes": 80,  # 主题：每多出现一天半衰期多 0.5 倍（最多 6 倍）
@@ -189,6 +195,8 @@ def strength(e: dict, cfg: dict | None = None, now: float | None = None) -> floa
         days = max(days, float(hl.get("owner", 180)))
     if _is_file(e):
         days = float(cfg["fileHalfLifeDays"])
+    elif e.get("kind") == "trait":
+        days = float(cfg["traitHalfLifeDays"])
     elif e.get("kind") == "log" and e.get("keep") is not None:
         kh = cfg["keepHalfLifeDays"]
         days = float(kh.get(str(e["keep"]), kh.get("1", 4)))
@@ -465,7 +473,7 @@ def recall(subjects: list[str], query: str = "", key: str | None = None,
                     hit = True
                 out.append({"id": e["id"], "subject": subject, "text": e["text"],
                             "updated": time.strftime("%Y-%m-%d", time.localtime(e["updated"])),
-                            **({"kind": e["kind"]} if e.get("kind") in ("summary", "log", "file", "theme") else {}),
+                            **({"kind": e["kind"]} if e.get("kind") in ("summary", "log", "file", "theme", "trait") else {}),
                             **({"days": len(e.get("days") or [])} if _is_theme(e) else {}),
                             **({"file": e.get("file"), "name": e.get("name")} if _is_file(e) else {}),
                             **({"scope": e["scope"]} if e.get("scope") else {}),
@@ -515,14 +523,17 @@ def same_story(a: str, b: str, idf: dict[str, float], cfg: dict) -> bool:
 
 
 def note(subject: str, text: str, source: str = "", trusted: bool = False, interest: int | None = None,
-         scope: list[str] | None = None) -> dict:
+         scope: list[str] | None = None, trait: bool = False) -> dict:
     """trusted=True only from digest.py (owner verified by QQ sender); unlocks subject "rules".
     A self note with an `interest` (1-3), or any self note from the play session, is a 见闻 (kind=log).
-    `scope` (rules only, already checked with check_scope): where the rule applies; empty = everywhere."""
+    `scope` (rules only, already checked with check_scope): where the rule applies; empty = everywhere.
+    `trait` (digest only, subject self; her memory_note can't set it): something she said about herself
+    that stays true (kind=trait)."""
     cfg = _cfg()
     subject = _check_subject(subject, trusted)
     scope = list(scope or []) if subject == RULES else []
     is_log = subject == "self" and (bool(interest) or source == "play:main")
+    trait = bool(trait) and subject == "self" and not is_log
     text = " ".join(text.split())
     if not text:
         raise ValueError("text 不能为空")
@@ -557,6 +568,8 @@ def note(subject: str, text: str, source: str = "", trusted: bool = False, inter
                 e.update(text=text, updated=now, source=source)
                 if subject == RULES:
                     _set_scope(e, scope)
+                if trait:
+                    e["kind"] = "trait"
                 if is_log:
                     e["interest"] = max(_interest(e.get("interest")), _interest(interest or 1))
                 save_json(PATH, db)
@@ -568,6 +581,8 @@ def note(subject: str, text: str, source: str = "", trusted: bool = False, inter
                  "created": now, "updated": now, "hits": 0, "source": source}
         if is_log:
             entry.update(kind="log", interest=_interest(interest or 1))
+        elif trait:
+            entry["kind"] = "trait"
         _set_scope(entry, scope)
         db["entries"].append(entry)
         cap = (cfg["maxLogs"] if is_log else cfg["maxSelf"] if subject == "self"
@@ -625,9 +640,11 @@ def _set_scope(e: dict, scope: list[str]) -> None:
         e.pop("scope", None)
 
 
-def update(memory_id: str, text: str, source: str = "", trusted: bool = False, scope: list[str] | None = None) -> dict:
+def update(memory_id: str, text: str, source: str = "", trusted: bool = False, scope: list[str] | None = None,
+           trait: bool = False) -> dict:
     """Rewrite one memory in place (used by digest.py when a fact or rule changed).
-    `scope` None keeps a rule's scope; a list (maybe empty = everywhere) replaces it."""
+    `scope` None keeps a rule's scope; a list (maybe empty = everywhere) replaces it.
+    `trait` turns one of her plain self facts into a trait (never the other way)."""
     text = " ".join(text.split())
     with LOCK:
         db = _load()
@@ -642,6 +659,8 @@ def update(memory_id: str, text: str, source: str = "", trusted: bool = False, s
         e.update(text=text, updated=now, source=source)
         if scope is not None and e["subject"] == RULES:
             _set_scope(e, scope)
+        if trait and e["subject"] == "self" and not e.get("kind"):
+            e["kind"] = "trait"
         save_json(PATH, db)
     return {"ok": True, "updated": memory_id}
 

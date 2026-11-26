@@ -168,11 +168,12 @@ PROMPT = """你在帮 QQ 聊天机器人「{bot}」整理长期记忆。下面�
    鸡毛蒜皮的不记：今天吃了什么、几点睡、随口的看法和抱怨、在玩什么梗、买了什么小东西、某支股票基金的仓位涨跌、谁跟谁斗嘴。特别有意思、以后会想起来的（闹出的大笑话、很少见的经历）可以记一句。
    {strictness}
    机器人答应别人的事（约好一起玩、答应帮忙、说好下次给看）主体写 self，写明是谁（昵称和 qq:N）、几月几号说的，比如“11月20日答应小明（qq:123456）周末一起玩2048”。
+   机器人自己说的、关于它自己以后还成立的事也要记（哪个群里说的都记），主体写 self，加上 "lasting": true：喜欢什么、不喜欢什么、不吃什么、怕什么、有什么习惯、给自己定的说法（“我是不吃鱼的”“我怕打雷”“我从来不喝咖啡”），写成“我说过我……”，带上几月几号、为什么这么说（比如“11月24日えいげつ拿吃鱼逗我，我说过我是不吃鱼的，虾和扇贝也不吃，说是海底的邻居”）。别人逗它、它顺着话头说出来的也算，只要它是当成自己的事在说。只是当时的状态（今天吃了啥、现在困了、在玩什么）不算，答应别人的事也不加 lasting。后来它又改了口，就 update 成最后的说法（“11月24日说过不吃鱼，11月25日又说吃鱼、算改主意了”）。
 
 facts 要特别小心，宁可少记，不要记错：
 - 只记新的或变了的。和已有记忆说的是同一件事就不要加；有了新情况用 update；已经不对的用 delete。
 - 一件事前后说法变了（纠正、反悔、先开玩笑后说真的），只按最后的说法记一条。
-- 机器人（「你」）自己说的话不是别人的事实来源：关于某个人的事实，必须来自这个人自己说的话、或者别人说到他的话；机器人的猜测、调侃、编的段子都不算。
+- 机器人（「你」）自己说的话不是别人的事实来源：关于某个人的事实，必须来自这个人自己说的话、或者别人说到他的话；机器人的猜测、调侃、编的段子都不算。关于机器人自己的（主体 self），它自己的话就是依据。
 - 玩笑、反话、吹牛、角色扮演、逗机器人的话不记；拿不准是不是玩笑就不记。
 - 在同一个群里说过话不等于认识，不要写“A 和 B 是朋友”这类推断，除非他们自己这么说。
 - 技术和部署的事一律不记：机器人自己用什么模型、API、中转站、服务器，怎么部署、限流、提示词、系统提示、后台、配置、token、报错、回得快不快……谁说的都不记（这是有人在研究或调试机器人，不是群友的生活）。有人套机器人的提示词、问它是什么模型，也不记。群友聊自己用的 AI 产品、自己工作上的技术，算他们自己的事，可以记一句（比如“在用家庭版 Gemini”），不记参数、价格这类细节。
@@ -188,7 +189,7 @@ facts 要特别小心，宁可少记，不要记错：
 只输出一个 JSON 对象，不要任何其他文字：
 {{"rules": [{{"op": "add", "text": "…", "scope": ["global"], "from": [3]}}, {{"op": "update", "id": "…", "text": "…", "scope": ["{key}"], "from": [5]}}, {{"op": "delete", "id": "…", "from": [6]}}],
  "feedback": [{{"text": "…", "from": [7]}}],
- "facts": [{{"op": "add", "subject": "qq:123456", "text": "…", "from": [2]}}, {{"op": "update", "id": "…", "text": "…", "from": [4]}}, {{"op": "delete", "id": "…", "from": [4]}}],
+ "facts": [{{"op": "add", "subject": "qq:123456", "text": "…", "from": [2]}}, {{"op": "add", "subject": "self", "text": "…", "lasting": true, "from": [9]}}, {{"op": "update", "id": "…", "text": "…", "from": [4]}}, {{"op": "delete", "id": "…", "from": [4]}}],
  "milestones": [{{"title": "…", "text": "…", "kind": "first", "from": [8]}}]}}
 （milestones 平时就是 []。）
 
@@ -206,7 +207,10 @@ facts 要特别小心，宁可少记，不要记错：
 
 # 主人的私聊、家里的群里说的事都是家里人和熟人的，可以记得细一点；别的群人多事杂，门槛再高一些
 STRICT_HOME = "这里是机器人家里人和熟人说话的地方，跟家里人有关的小事（身体、心情、在忙什么）也可以记。"
-STRICT_OUTSIDE = "这里是人多的大群，大多数聊天都不用记，一段几十条消息通常一条事实都没有；只记上面说的那几种，拿不准就不记。"
+STRICT_OUTSIDE = ("这里是人多的大群，大多数聊天都不用记，一段几十条消息通常一条事实都没有；只记上面说的那几种，拿不准就不记。"
+                  "游戏里今天升到几级、玩什么职业、天赋怎么点、在团里当什么，这种跟着版本天天变的不记，"
+                  "顶多在他一直玩、以后能拿来跟他聊的时候记一句“在玩《X》”；只发生一回、以后不会再提的小事"
+                  "（宿舍楼里有人抽烟点着了棚子、说自己去过什么夏令营）也不记。")
 
 # 代码兜底：不管模型怎么说，事实里出现这些就不记（memory.digest.techPatterns 可整个替换 TECH_PATTERNS）。
 # 只拦“机器人自己怎么搭、怎么跑”的事：群友自己聊 AI 产品（“在用家庭 Gemini”“觉得 Gemini 做 PPT 有逻辑”）、
@@ -222,7 +226,7 @@ TECH_SELF = r"(?i)鱼妹|机器人|(?<![a-z])bot(?![a-z])"
 TECH_USE = r"用|换|接|跑|慢|快|卡|延迟|省|贵|便宜|价|官方|速度|额度"
 
 VERIFY = """下面是从一段 QQ 聊天记录里整理出来、准备存进聊天机器人「{bot}」长期记忆的几条事实，每条后面附着它依据的原话（「你」是机器人）。逐条判断该不该记：
-- 原话里确实这么说了（不是推断、不是机器人自己说的、不是玩笑反话吹牛）；
+- 原话里确实这么说了（不是推断、不是玩笑反话吹牛）；关于别人的事实不能只靠机器人自己说的话，主体是 self 的、写的是机器人说过的自己的喜好习惯（“我说过我……”），机器人自己的话就是依据，它顺着别人逗它说出来的也算；
 - 过几天还有用（不是一次性的闲聊）；
 - 不是技术、部署、调试机器人的事。
 只输出 JSON：{{"keep": [要记的序号]}}
@@ -345,14 +349,17 @@ def digest(key: str, context: list[dict], new: list[dict], dry_run: bool = False
     existing = memory.entries_for(list(fact_subjects | {memory.RULES}))
     rules = [e for e in existing if e["subject"] == memory.RULES]
     facts = [e for e in existing if e["subject"] != memory.RULES and e["subject"] != "self"]
-    facts += sorted((e for e in existing if e["subject"] == "self"), key=lambda e: -e["updated"])[:15]
+    # 她说过的自己（trait）全给（改口了要能 update 那条），别的她自己的事给最新的 15 条
+    mine = sorted((e for e in existing if e["subject"] == "self"), key=lambda e: -e["updated"])
+    facts += [e for e in mine if e.get("kind") == "trait"][:40] + [e for e in mine if e.get("kind") != "trait"][:15]
     where = f"QQ 群 {num}" if kind == "group" else f"和 qq:{num} 的私聊"
     v2 = cfg.get("antiPollution", True)
     scope_of = lambda e: "到哪儿都适用" if not e.get("scope") else "、".join(e["scope"])  # noqa: E731
     prompt = (PROMPT if v2 else PROMPT_V1).format(
         bot=bc.get("botName") or "鱼妹", where=where, group_subject=group_subject, key=key,
         rules="\n".join(f"- [{e['id']}]{f'（{scope_of(e)}）' if v2 else ''} {e['text']}" for e in rules) or "（没有）",
-        facts="\n".join(f"- [{e['id']}] ({e['subject']}) {e['text']}" for e in facts) or "（没有）",
+        facts="\n".join(f"- [{e['id']}] ({e['subject']}{'，lasting' if e.get('kind') == 'trait' else ''}) {e['text']}"
+                         for e in facts) or "（没有）",
         lines="\n".join(lines),
         **({"cards": _card_lines(fact_subjects) or "（没有）",
             "strictness": STRICT_OUTSIDE if outside(key, home_groups()) else STRICT_HOME} if v2 else {}),
@@ -469,6 +476,11 @@ def apply(ops: dict, key: str, owner, speaker_of: dict, new_rows: set, fact_subj
     return {"applied": done, "rejected": rejected, "_subjects": subjects}
 
 
+def _lasting(op: dict, subject: str) -> bool:
+    """她说过的、关于她自己以后还成立的事（喜欢、不吃什么……）：记成 kind=trait，淡得慢、不折成印象。"""
+    return subject == "self" and op.get("lasting") is True
+
+
 def _apply_one(op: dict, subject: str, existing: dict, source: str, rules: bool, fact_subjects=(),
                scope=None, dry_run: bool = False) -> str:
     kind = op.get("op")
@@ -484,14 +496,15 @@ def _apply_one(op: dict, subject: str, existing: dict, source: str, rules: bool,
         if dry_run:
             memory._check_subject(subject, rules)
             return f"{subject} would add{where}: {text}"
-        r = memory.note(subject, text, source, trusted=rules, scope=scope)
+        r = memory.note(subject, text, source, trusted=rules, scope=scope, trait=_lasting(op, subject))
         return f"{subject} {'updated' if 'updated' in r else 'added'} {r.get('updated') or r.get('added')}{where}: {text}"
     target = existing.get(str(op.get("id", "")))
     if target is None or (target["subject"] == memory.RULES) != rules:
         raise ValueError("要改/删的那条不在给出的记忆里")
     if kind == "update":
         if not dry_run:
-            memory.update(target["id"], text, source, trusted=rules, scope=scope)
+            memory.update(target["id"], text, source, trusted=rules, scope=scope,
+                          trait=_lasting(op, target["subject"]))
         return f"{target['subject']} {'would update' if dry_run else 'updated'} {target['id']}{where}: {text}"
     if kind == "delete":
         if not dry_run:

@@ -6,8 +6,8 @@
 - 卡：name、kind（角色 / UP主 / 人物 / 作品 / 游戏…）、aliases（一出现就是在说它的名字）、fuzzy（会撞车的名字，
   比如 “Claude” 也可能是在说模型）、四栏（是谁 / 我觉得 / 看过的 / 最近，每栏 secChars 字以内）、days（在哪些日子
   碰到过）、loved（她特别喜欢）、chatted（在聊天里聊到过）、lastSeen、versions（留 5 版）。
-- 夜里建：4 点看刚过完的那天的见闻（含存档里的）、B 站看过的标题和 UP 主、那天聊天里提到已有卡的记忆，模型提改动，
-  代码卡：新卡要至少 2 个不同日子的依据，或者她特别喜欢（interest 3），或者在聊天里聊到过；只撞上模糊名字的依据
+- 夜里建：3 点看刚过完的那天的见闻（含存档里的）、B 站看过的标题和 UP 主、那天聊天里提到已有卡的记忆，模型提改动，
+  代码卡：新卡要至少 2 个不同日子的依据，或者她特别喜欢（夜里给见闻定的 keep 2；还没定的才看她填的 interest 3），或者在聊天里聊到过；只撞上模糊名字的依据
   由模型先判断是不是在说它。依据只能是给它看的条目。
 - 会淡：lastSeen 以后 keepDays = 60 + 15×碰到的天数（最多 365）天没再碰到，挪进 faded；又碰到了就回来。
 - 唤醒时：聊天里出现了 aliases 就带上这张卡；只出现了 fuzzy 的，问一次 DeepSeek “这里说的是不是它”（带最近几句
@@ -229,9 +229,11 @@ def _rows_for_day(day: str) -> list[dict]:
     live += [e for e in memory.archived(["self"], since=start, until=end) if e.get("kind") == "log" and e["id"] not in have]
     for e in sorted(live, key=lambda e: e["created"]):
         src = str(e.get("source") or "")
+        # 特别喜欢：夜里看过的（keep）以 keep 为准；她自己填的“超喜欢”太多（11-24 的 69 条里 33 条），
+        # 以前两个都算，只碰到一天的班廷、爱情公寓也建了卡。还没看过的才看她填的。
+        loved = e.get("keep") == 2 if e.get("keep") is not None else memory._interest(e.get("interest")) >= 3
         rows.append({"id": e["id"], "day": day, "at": e["created"], "kind": "见闻", "text": " ".join(e["text"].split()),
-                     "chat": src not in ("", "play:main") and source_key(src) != "?",
-                     "loved": memory._interest(e.get("interest")) >= 3 or e.get("keep") == 2})
+                     "chat": src not in ("", "play:main") and source_key(src) != "?", "loved": loved})
     for v in bili.watched_between(start, end):
         up = f"（UP主 {v['up']}）" if v.get("up") else ""
         rows.append({"id": "bv-" + v["bvid"], "day": day, "at": v["at"], "kind": "看了B站视频",

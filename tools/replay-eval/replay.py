@@ -443,7 +443,7 @@ def run_scenario(sc, variant, key, tools_cache):
 
 # ---------- 挑场景 ----------
 
-CHAT = ['private_900000001', 'group_1100000001', 'group_1100000003', 'group_800000002']
+CHAT = ['private_900000001', 'private_1600000002', 'group_1100000001', 'group_1100000003', 'group_800000002', 'group_1000000004']
 LABEL = {'private_900000001': '私聊', 'group_1100000001': '小群', 'group_1100000003': '技术群', 'group_800000002': '大群', 'group_1000000004': '大群2',
          'private_1600000002': '妈妈私聊', 'play_main': 'play'}
 SELF_NAMES = re.compile(r'鱼妹|小鱼|🐟姐')

@@ -206,7 +206,7 @@ def run_once() -> dict:
     for subject, rows in memory.by_subject().items():
         if not (subject == "self" or subject.startswith("group:")):
             continue
-        faded = [e for e in rows if e.get("kind") not in ("summary", "log", "theme") and e["strength"] < float(cfg["foldBelow"])]
+        faded = [e for e in rows if e.get("kind") not in ("summary", "log", "theme", "trait") and e["strength"] < float(cfg["foldBelow"])]
         if len(faded) >= int(cfg["minFold"]):
             _step(done, subject, lambda: _fold(subject, faded, max(1, min(6, len(faded) // 5))))
         summaries = [e for e in memory.by_subject().get(subject, []) if e.get("kind") == "summary"]
@@ -250,7 +250,7 @@ def evolve_profile() -> str:
         return f"failed: {exc}"
 
 
-# 4 点那次连不上（11-07、11-10 都是 DNS 解析失败，那一晚就没长），之后每小时再试一次，试到 RETRY_HOURS 小时后
+# 整理那次连不上（11-07、11-10、11-24 都是 4 点 DNS 解析失败：路由器每天 4 点重启，现在改在 3 点），之后每小时再试一次，试到 RETRY_HOURS 小时后
 RETRY_HOURS = 4
 
 
